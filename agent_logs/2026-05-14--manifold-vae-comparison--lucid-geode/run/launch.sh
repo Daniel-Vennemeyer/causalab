@@ -36,6 +36,17 @@ export CAUSALAB_SESSION_CODE="${SESSION_DIR}"
 export HF_HOME
 mkdir -p "${HF_HOME}"
 
+# scripts/run_exp.sh uses `uv run`, which builds the project's (large, CUDA)
+# environment. By default uv writes its cache to ~/.cache/uv and the venv to
+# <repo>/.venv — both on the HOME partition, which on this cluster is small and
+# fills up ("No space left on device"). Redirect both to DATA_ROOT. Only set if
+# the user hasn't already pointed them elsewhere.
+: "${UV_CACHE_DIR:=${DATA_ROOT}/uv_cache}"
+export UV_CACHE_DIR
+: "${UV_PROJECT_ENVIRONMENT:=${DATA_ROOT}/uv_venv}"
+export UV_PROJECT_ENVIRONMENT
+mkdir -p "${UV_CACHE_DIR}"
+
 DATA_ARTIFACTS="${DATA_ROOT}/${SESSION}/artifacts"
 EXP_ROOT="${DATA_ARTIFACTS}/${TASK_DIRNAME}/${MODEL}"
 LOG_DIR="${SESSION_DIR}/run"
@@ -56,6 +67,8 @@ echo "DATA_ROOT            = ${DATA_ROOT}"
 echo "EXP_ROOT            = ${EXP_ROOT}"
 echo "CAUSALAB_SESSION_CODE = ${CAUSALAB_SESSION_CODE}"
 echo "HF_HOME             = ${HF_HOME}"
+echo "UV_CACHE_DIR        = ${UV_CACHE_DIR}"
+echo "UV_PROJECT_ENVIRONMENT = ${UV_PROJECT_ENVIRONMENT}"
 echo "MODEL               = ${MODEL}   DEBUG=${DEBUG}"
 echo
 
