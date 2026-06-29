@@ -1,0 +1,198 @@
+"""Composite loss bundle for behavior-aligned VAE training.
+
+Computes a weighted sum of reconstruction, KL, behavior-alignment, isometry,
+geodesic-naturalness, and patch/intervention-consistency terms. Each term is
+gated by its weight; a zero weight skips the term entirely (and avoids any
+expensive computation). All weights are required keyword arguments.
+
+The method NEVER patches the frozen model -- ``patched_behavior`` is supplied
+by the analysis layer. No disk I/O.
+"""
+
+from __future__ import annotations
+
+from typing import Dict, Optional, Tuple
+
+import torch
+from torch import Tensor
+
+
+_EPS = 1e-8
+_VALID_BEHAVIOR_DISTANCES = ("kl", "hellinger", "js")
+
+
+def _behavior_distance(p: Tensor, q: Tensor, kind: str) -> Tensor:
+    """Mean per-row distance between two batches of probability vectors.
+
+    ``p``, ``q`` are (B, C) probability tensors (rows sum to 1).
+    """
+    p = p.clamp_min(_EPS)
+    q = q.clamp_min(_EPS)
+    if kind == "kl":
+        # KL(p || q), mean over batch.
+        return (p * (p / q).log()).sum(dim=-1).mean()
+    if kind == "hellinger":
+        # Squared Hellinger distance, mean over batch.
+        return 0.5 * ((p.sqrt() - q.sqrt()) ** 2).sum(dim=-1).mean()
+    if kind == "js":
+        m = 0.5 * (p + q)
+        jsd = 0.5 * (p * (p / m).log()).sum(dim=-1) + 0.5 * (
+            q * (q / m).log()
+        ).sum(dim=-1)
+        return jsd.mean()
+    raise ValueError(
+        f"behavior_distance must be one of {_VALID_BEHAVIOR_DISTANCES}, got {kind!r}"
+    )
+
+
+def _normalized_pdist(x: Tensor) -> Tensor:
+    """Pairwise Euclidean distance matrix normalized by its mean (off-diagonal
+    scale). Shape (B, B)."""
+    d = torch.cdist(x, x, p=2)
+    scale = d.mean().clamp_min(_EPS)
+    return d / scale
+
+
+class LossBundle:
+    """Callable bundle of weighted VAE training losses.
+
+    Args (all required): per-term weights and the behavior-distance kind.
+    """
+
+    def __init__(
+        self,
+        *,
+        w_recon: float,
+        w_kl: float,
+        w_behavior: float,
+        w_isometry: float,
+        w_geodesic: float,
+        w_patch: float,
+        behavior_distance: str,
+    ):
+        if behavior_distance not in _VALID_BEHAVIOR_DISTANCES:
+            raise ValueError(
+                f"behavior_distance must be one of {_VALID_BEHAVIOR_DISTANCES}, "
+                f"got {behavior_distance!r}"
+            )
+        self.w_recon = w_recon
+        self.w_kl = w_kl
+        self.w_behavior = w_behavior
+        self.w_isometry = w_isometry
+        self.w_geodesic = w_geodesic
+        self.w_patch = w_patch
+        self.behavior_distance = behavior_distance
+
+    @staticmethod
+    def recon_loss(h_hat: Tensor, h: Tensor) -> Tensor:
+        """MSE summed over dims, mean over batch."""
+        return ((h_hat - h) ** 2).sum(dim=-1).mean()
+
+    @staticmethod
+    def kl_loss(mu: Tensor, logvar: Tensor) -> Tensor:
+        """Gaussian KL of q(z|h) vs N(0, I), mean over batch."""
+        return -0.5 * (1 + logvar - mu.pow(2) - logvar.exp()).sum(dim=-1).mean()
+
+    def behavior_loss(self, pred_probs: Tensor, target_probs: Tensor) -> Tensor:
+        return _behavior_distance(pred_probs, target_probs, self.behavior_distance)
+
+    @staticmethod
+    def isometry_loss(u: Tensor, behavior_targets: Tensor) -> Tensor:
+        """Match the normalized pairwise-distance geometry of intrinsic coords
+        to that of the behavior targets."""
+        du = _normalized_pdist(u)
+        dy = _normalized_pdist(behavior_targets)
+        return ((du - dy) ** 2).mean()
+
+    @staticmethod
+    def geodesic_loss(decoded_path: Tensor) -> Tensor:
+        """Path-smoothness penalty: mean squared consecutive-step difference of
+        decoded activations along a geodesic. ``decoded_path`` is (P, ambient)."""
+        steps = decoded_path[1:] - decoded_path[:-1]
+        return (steps**2).sum(dim=-1).mean()
+
+    def compute_losses(
+        self,
+        *,
+        h: Tensor,
+        h_hat: Tensor,
+        mu: Tensor,
+        logvar: Tensor,
+        u: Optional[Tensor] = None,
+        kl_weight_scale: float = 1.0,
+        behavior_pred: Optional[Tensor] = None,
+        behavior_target: Optional[Tensor] = None,
+        decoded_path: Optional[Tensor] = None,
+        patched_behavior: Optional[Tensor] = None,
+        extra_loss: Optional[Tensor] = None,
+    ) -> Tuple[Tensor, Dict[str, float]]:
+        """Return ``(total_loss, metrics)``.
+
+        Args:
+            h, h_hat: target and reconstructed activations (B, ambient).
+            mu, logvar: posterior parameters (B, enc_dim).
+            u: intrinsic coordinates (B, k); required for the isometry term.
+            kl_weight_scale: KL warmup multiplier (architectural, not a tuned
+                weight) applied on top of ``w_kl``.
+            behavior_pred, behavior_target: predicted/target behavior probs.
+            decoded_path: decoded geodesic activations (P, ambient) for the
+                geodesic term; skipped if None.
+            patched_behavior: behavior probs from a frozen patched model
+                (computed by the analysis layer) for the patch term.
+            extra_loss: optional pre-computed scalar added verbatim (e.g. a
+                router-entropy regularizer); not weighted here.
+        """
+        device = h.device
+        total = torch.zeros((), device=device, dtype=h.dtype)
+        metrics: Dict[str, float] = {}
+
+        if self.w_recon != 0.0:
+            recon = self.recon_loss(h_hat, h)
+            total = total + self.w_recon * recon
+            metrics["recon"] = recon.item()
+
+        if self.w_kl != 0.0:
+            kl = self.kl_loss(mu, logvar)
+            total = total + self.w_kl * kl_weight_scale * kl
+            metrics["kl"] = kl.item()
+
+        if self.w_behavior != 0.0:
+            if behavior_pred is None or behavior_target is None:
+                raise ValueError(
+                    "behavior term enabled (w_behavior != 0) but behavior_pred/"
+                    "behavior_target not supplied"
+                )
+            beh = self.behavior_loss(behavior_pred, behavior_target)
+            total = total + self.w_behavior * beh
+            metrics["behavior"] = beh.item()
+
+        if self.w_isometry != 0.0:
+            if u is None or behavior_target is None:
+                raise ValueError(
+                    "isometry term enabled (w_isometry != 0) but u/behavior_target "
+                    "not supplied"
+                )
+            iso = self.isometry_loss(u, behavior_target)
+            total = total + self.w_isometry * iso
+            metrics["isometry"] = iso.item()
+
+        if self.w_geodesic != 0.0 and decoded_path is not None:
+            geo = self.geodesic_loss(decoded_path)
+            total = total + self.w_geodesic * geo
+            metrics["geodesic"] = geo.item()
+
+        if self.w_patch != 0.0 and patched_behavior is not None:
+            if behavior_target is None:
+                raise ValueError(
+                    "patch term enabled (w_patch != 0) but behavior_target not "
+                    "supplied"
+                )
+            patch = self.behavior_loss(patched_behavior, behavior_target)
+            total = total + self.w_patch * patch
+            metrics["patch"] = patch.item()
+
+        if extra_loss is not None:
+            total = total + extra_loss
+
+        metrics["total"] = total.item()
+        return total, metrics

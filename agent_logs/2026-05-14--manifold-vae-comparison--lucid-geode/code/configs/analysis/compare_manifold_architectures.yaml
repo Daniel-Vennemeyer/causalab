@@ -1,0 +1,8 @@
+# @package compare_manifold_architectures
+_name_: compare_manifold_architectures
+_subdir: default
+_output_dir: ${experiment_root}/compare_manifold_architectures/${._subdir}
+metrics: [reconstruction, kl, behavior_distance, isometry_pearson_r, geodesic_naturalness, patch_consistency]
+baseline_arm: spline
+visualization:
+  figure_format: pdf

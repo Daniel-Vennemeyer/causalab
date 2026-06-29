@@ -1,0 +1,36 @@
+# @package _global_
+# Debug VAE arm for the weekdays manifold-VAE comparison.
+# Runs a SINGLE flat-VAE, reconstruction+KL-only arm (the simplest arm per the
+# plan's contingency) and auto-discovers the shared-root subspace / baseline /
+# output_manifold artifacts produced by weekdays_current_spline.yaml. Run this
+# SECOND against the SAME --experiment-root so the cache is reused.
+#
+# Validates the full VAE training + metric machinery (reconstruction, KL,
+# isometry-vs-belief, geodesic naturalness) before launching the priority sweep
+# (behavior-aligned / metric / atlas arms). Patch evaluation stays off for debug.
+defaults:
+  - /base
+  - /task: natural_domains_arithmetic_weekdays
+  - /model: llama31_8b
+  - /analysis/behavior_manifold_vae
+  - _self_
+
+task:
+  target_variable: result
+
+behavior_manifold_vae:
+  method: flat_vae
+  topology: unstructured
+  metric: latent_linear
+  latent_dim: 2
+  layers: [28]
+  token_positions: [last_token]
+  loss_weights:
+    w_recon: 1.0
+    w_kl: 0.1
+    w_behavior: 0.0
+    w_isometry: 0.0
+    w_geodesic: 0.0
+    w_patch: 0.0
+  patch_eval: false
+  device: cpu

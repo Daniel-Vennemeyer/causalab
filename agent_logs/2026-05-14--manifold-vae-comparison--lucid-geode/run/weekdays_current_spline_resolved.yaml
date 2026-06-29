@@ -1,0 +1,158 @@
+seed: 42
+experiment_root: agent_logs/2026-05-14--manifold-vae-comparison--lucid-geode/artifacts/natural_domains_arithmetic_weekdays/llama31_8b
+slurm:
+  time: 04:00:00
+task:
+  name: natural_domains_arithmetic
+  domain_type: weekdays
+  variant: weekdays
+  number_range: null
+  number_groups: null
+  max_new_tokens: 1
+  colormap: rainbow
+  colormap2: null
+  intervention_metric: kl
+  reference_source: empirical
+  n_train: 1000
+  n_test: 50
+  enumerate_all: true
+  balanced: false
+  resample_variable: all
+  distance_function: hellinger
+  isometry:
+    distance_function: ${task.distance_function}
+    grid_range:
+    - 0
+    - 7
+    grid_resolution: 150
+    bin_positions: null
+  target_variable: result
+model:
+  id: llama31_8b
+  name: meta-llama/Llama-3.1-8B
+  device: auto
+  dtype: bfloat16
+  slurm:
+    gpus: 1
+baseline:
+  _name_: baseline
+  batch_size: 32
+  visualization:
+    figure_format: pdf
+subspace:
+  _name_: subspace
+  _subdir: ${.method}_k${.k_features}
+  _output_dir: ${experiment_root}/subspace/${._subdir}
+  method: pca
+  k_features: 64
+  batch_size: 32
+  component_type: residual_stream
+  layers:
+  - 28
+  token_positions:
+  - last_token
+  heads: null
+  token_position: null
+  modes: null
+  visualization:
+    figure_format: pdf
+    colormap: ${task.colormap}
+    vis_dims: null
+    detailed_hover: false
+    max_hover_chars: 50
+  das:
+    training_epoch: 4
+    lr: 0.001
+  dbm:
+    training_epoch: 20
+    lr: 0.001
+    regularization_coefficient: 0.1
+    tie_masks: false
+  boundless:
+    training_epoch: 20
+    lr: 0.001
+    regularization_coefficient: 0.1
+activation_manifold:
+  _name_: activation_manifold
+  _subdir: ${.method}_s${.smoothness}
+  _output_dir: ${experiment_root}/activation_manifold/${._subdir}
+  method: spline
+  smoothness: 0.0
+  spline_method: auto
+  intrinsic_dim: null
+  n_grid: 21
+  batch_size: 32
+  subspace: null
+  layers:
+  - 28
+  token_positions:
+  - last_token
+  intrinsic_mode: pca
+  max_control_points: all
+  skip_decoding_eval: true
+  colormap: ${task.colormap}
+  embedding_shuffle_seed: null
+  visualization:
+    figure_format: pdf
+output_manifold:
+  _name_: output_manifold
+  _subdir: ${.method}_s${.smoothness}
+  _output_dir: ${experiment_root}/output_manifold/${._subdir}
+  method: spline
+  smoothness: 0.0
+  intrinsic_dim: 1
+  intrinsic_mode: pca
+  max_control_points: all
+  batch_size: 32
+  colormap: ${task.colormap}
+path_steering:
+  _name_: path_steering
+  _output_dir: ${experiment_root}/path_steering
+  eval_criteria:
+  - isometry
+  - coherence
+  - distance_from_behavior_manifold
+  path_modes:
+  - geometric
+  - linear
+  selected_pairs: null
+  max_pairs: 50
+  n_extra_pairs: 29
+  n_prompts: 16
+  n_eval_samples: 100
+  batch_size: 32
+  subspace: null
+  activation_manifold: null
+  encode_mode: nearest_centroid
+  replot_only: false
+  recompute_isometry: false
+  num_steps_along_path: 50
+  isometry:
+    n_arc_steps: 150
+    distance_function: null
+    n_interior_per_pair: 4
+  oversteer:
+    frac: 0.0
+    num_steps: 10
+  visualization:
+    figure_format: pdf
+  visualizations:
+  - path_visualization
+  - isometry_visualization
+  - dual_manifold
+  path_visualization:
+    colormaps:
+    - ${task.colormap}
+    - ${task.colormap2}
+    path_colors:
+      geometric: black
+      linear: darkgray
+    full_vocab_softmax: true
+    pca_components: null
+    colored_concepts_in_legend: null
+    figsize: null
+    font_scale: 1.0
+  isometry_visualization:
+    figure_format: ${..visualization.figure_format}
+    n_mds_components: 3
+    hover_label_format: grid_coords

@@ -1,0 +1,16 @@
+# @package _global_
+# Aggregation step for the weekdays manifold-VAE comparison.
+# Runs compare_manifold_architectures, which scans the shared EXP_ROOT for the
+# spline baseline (activation_manifold + path_steering) and every VAE arm
+# (behavior_manifold_vae/**/comparison_ready.json) and emits summary.csv,
+# ablation_matrix.md, metric_deltas.json, and figures. Run this LAST against the
+# SAME --experiment-root, after the spline pipeline and at least one VAE arm.
+defaults:
+  - /base
+  - /task: natural_domains_arithmetic_weekdays
+  - /model: llama31_8b
+  - /analysis/compare_manifold_architectures
+  - _self_
+
+task:
+  target_variable: result

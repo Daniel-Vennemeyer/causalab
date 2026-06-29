@@ -1,0 +1,50 @@
+seed: 42
+experiment_root: agent_logs/2026-05-14--manifold-vae-comparison--lucid-geode/artifacts/natural_domains_arithmetic_weekdays/llama31_8b
+slurm:
+  time: 04:00:00
+task:
+  name: natural_domains_arithmetic
+  domain_type: weekdays
+  variant: weekdays
+  number_range: null
+  number_groups: null
+  max_new_tokens: 1
+  colormap: rainbow
+  colormap2: null
+  intervention_metric: kl
+  reference_source: empirical
+  n_train: 1000
+  n_test: 50
+  enumerate_all: true
+  balanced: false
+  resample_variable: all
+  distance_function: hellinger
+  isometry:
+    distance_function: ${task.distance_function}
+    grid_range:
+    - 0
+    - 7
+    grid_resolution: 150
+    bin_positions: null
+  target_variable: result
+model:
+  id: llama31_8b
+  name: meta-llama/Llama-3.1-8B
+  device: auto
+  dtype: bfloat16
+  slurm:
+    gpus: 1
+compare_manifold_architectures:
+  _name_: compare_manifold_architectures
+  _subdir: default
+  _output_dir: ${experiment_root}/compare_manifold_architectures/${._subdir}
+  metrics:
+  - reconstruction
+  - kl
+  - behavior_distance
+  - isometry_pearson_r
+  - geodesic_naturalness
+  - patch_consistency
+  baseline_arm: spline
+  visualization:
+    figure_format: pdf

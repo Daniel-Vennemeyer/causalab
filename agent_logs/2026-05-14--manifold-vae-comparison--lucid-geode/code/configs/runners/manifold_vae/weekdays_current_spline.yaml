@@ -1,0 +1,35 @@
+# @package _global_
+# Current-code reproduction for the weekdays manifold-VAE comparison.
+# Chains the shipped spline pipeline (baseline -> subspace -> activation_manifold
+# -> output_manifold -> path_steering) at layer 28. Produces the spline baseline,
+# the belief (output) manifold, and the cached subspace features that the VAE
+# arms reuse. Run this FIRST against the shared EXP_ROOT so the downstream
+# behavior_manifold_vae and compare_manifold_architectures runs hit the cache.
+#
+# NOTE: targets meta-llama/Llama-3.1-8B on a CUDA GPU (see issues.md — execution
+# deferred from the Mac/MPS dev box). To run on a smaller cached model, override
+# `model=llama32_1b_instruct` (or another model config) on the CLI.
+defaults:
+  - /base
+  - /task: natural_domains_arithmetic_weekdays
+  - /model: llama31_8b
+  - /analysis/baseline
+  - /analysis/subspace
+  - /analysis/activation_manifold
+  - /analysis/output_manifold
+  - /analysis/path_steering
+  - _self_
+
+task:
+  target_variable: result
+
+subspace:
+  layers: [28]
+
+activation_manifold:
+  layers: [28]
+
+path_steering:
+  n_extra_pairs: 29
+  isometry:
+    n_interior_per_pair: 4
