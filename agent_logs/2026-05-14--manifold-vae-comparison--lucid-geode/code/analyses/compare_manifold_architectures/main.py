@@ -46,6 +46,7 @@ _METRIC_KEYS = [
 _DESCRIPTOR_KEYS = [
     "arm_id",
     "architecture",
+    "arm_label",
     "task",
     "topology",
     "n_charts",
@@ -256,7 +257,7 @@ def _write_summary_by_arm(rows: list[dict[str, Any]], out_dir: str) -> str:
     mean/std/n across seeds for each metric. This is the error-bar view: an arm
     is the descriptor tuple minus seed."""
     group_keys = [
-        "architecture", "task", "topology", "n_charts",
+        "architecture", "arm_label", "task", "topology", "n_charts",
         "metric", "loss_set", "layer", "token_position",
     ]
     agg_metrics: list[str] = []
