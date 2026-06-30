@@ -443,7 +443,18 @@ def _run_patch_eval(
 
         pair_dists_list: list[torch.Tensor] = []
         n_pairs_used = 0
-        _patch_pairs = list(itertools.combinations(range(Wp), 2))[:patch_max_pairs]
+        # Patch a FIXED budget of class-centroid pairs (cost ~constant across
+        # tasks). When C(Wp,2) > patch_max_pairs, take an EVEN stride sample, not
+        # the first N: combinations() emits all (0,j) before any (1,j), so the
+        # first N pairs share class 0 for Wp>patch_max_pairs (e.g. alphabet Wp=22,
+        # age Wp=91) — that would measure steering from a single class only. A
+        # stride sample spreads pairs across the class set. Reproducible (no RNG).
+        _all_pairs = list(itertools.combinations(range(Wp), 2))
+        if len(_all_pairs) > patch_max_pairs:
+            _stride = len(_all_pairs) // patch_max_pairs
+            _patch_pairs = _all_pairs[::_stride][:patch_max_pairs]
+        else:
+            _patch_pairs = _all_pairs
         for (i, j) in tqdm(_patch_pairs, desc=f"patch[{analysis.metric}]: 8B forwards/pair"):
             if use_geodesic:
                 path = solver.geodesic(

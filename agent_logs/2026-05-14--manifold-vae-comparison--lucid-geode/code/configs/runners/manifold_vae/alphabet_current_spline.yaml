@@ -1,0 +1,32 @@
+# @package _global_
+# Generalization (Phase 1): alphabet domain (NON-cyclic, a line E..Z, W=22).
+# The key contrast to weekdays/months: topology is an interval, not a ring, so
+# this tests whether discovery + the w_manifold steering win hold for a different
+# topology. Mirrors weekdays_current_spline EXACTLY (layer 28, n_extra_pairs=29,
+# default num_steps_along_path=50) for metric comparability. NOTE: with W=22 the
+# VAE patches an even-stride sample of 21 of C(22,2)=231 centroid pairs.
+defaults:
+  - /base
+  - /task: natural_domains_arithmetic_alphabet
+  - /model: llama31_8b
+  - /analysis/baseline
+  - /analysis/subspace
+  - /analysis/activation_manifold
+  - /analysis/output_manifold
+  - /analysis/path_steering
+  - _self_
+
+task:
+  target_variable: result
+
+subspace:
+  layers: [28]
+
+activation_manifold:
+  layers: [28]
+
+path_steering:
+  n_extra_pairs: 29
+  batch_size: 128
+  isometry:
+    n_interior_per_pair: 4

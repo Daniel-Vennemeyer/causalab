@@ -13,7 +13,11 @@ set -euo pipefail
 DATA_ROOT="${DATA_ROOT:-/data/jiang/vennemdp/causalab}"
 SESSION="${SESSION:-2026-05-14--manifold-vae-comparison--lucid-geode}"
 MODEL="${MODEL:-llama31_8b}"
-TASK_DIRNAME="natural_domains_arithmetic_weekdays"
+# Per-domain EXP_ROOT (caches keyed by this). All natural_domains variants share
+# task.name=natural_domains_arithmetic, so distinct dirs are REQUIRED to avoid
+# cross-domain cache collisions. Override per domain, e.g.
+# TASK_DIRNAME=natural_domains_arithmetic_months.
+TASK_DIRNAME="${TASK_DIRNAME:-natural_domains_arithmetic_weekdays}"
 
 REPO_ROOT="$(pwd)"
 SESSION_DIR="${REPO_ROOT}/agent_logs/${SESSION}"

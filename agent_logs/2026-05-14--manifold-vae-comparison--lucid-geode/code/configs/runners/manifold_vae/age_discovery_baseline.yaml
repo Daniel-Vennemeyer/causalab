@@ -1,0 +1,28 @@
+# @package _global_
+# Generalization (Phase 1): age domain (NON-cyclic line, W=91), DISCOVERY-ONLY.
+# W=91 makes patch steering infeasible (C(91,2)=4095 pairs) and the prompt is an
+# atypical two-entity ("Alice/Bob") arithmetic, so we run everything EXCEPT
+# path_steering: baseline + subspace + activation_manifold + output_manifold are
+# all cheap (one model pass for baseline; the rest are spline fits, no 8B forwards).
+# output_manifold is REQUIRED — the VAE arm's eval isometry builds D_Y from the
+# belief manifold's control points (main.py ~L1003); without it isometry is None.
+# path_steering (the 8B patched-forward spline steering baseline) is the only
+# expensive step and is omitted — the age arm is scored on isometry/discovery only.
+defaults:
+  - /base
+  - /task: natural_domains_arithmetic_age
+  - /model: llama31_8b
+  - /analysis/baseline
+  - /analysis/subspace
+  - /analysis/activation_manifold
+  - /analysis/output_manifold
+  - _self_
+
+task:
+  target_variable: result
+
+subspace:
+  layers: [28]
+
+activation_manifold:
+  layers: [28]

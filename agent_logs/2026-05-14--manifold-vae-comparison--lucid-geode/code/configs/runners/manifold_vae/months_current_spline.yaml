@@ -1,0 +1,32 @@
+# @package _global_
+# Generalization (Phase 1): months domain (cyclic, modulus 12, W=12).
+# Mirrors weekdays_current_spline EXACTLY (layer 28, n_extra_pairs=29, default
+# num_steps_along_path=50) so the spline distance_from_behavior_manifold is on the
+# SAME scale as the VAE patch metric (which sums 50 steps). Do NOT inherit the
+# repo's months_8b_pipeline (it changes path_steering settings -> not comparable).
+# Produces the spline baseline + cached subspace features the VAE arms reuse.
+defaults:
+  - /base
+  - /task: natural_domains_arithmetic_months
+  - /model: llama31_8b
+  - /analysis/baseline
+  - /analysis/subspace
+  - /analysis/activation_manifold
+  - /analysis/output_manifold
+  - /analysis/path_steering
+  - _self_
+
+task:
+  target_variable: result
+
+subspace:
+  layers: [28]
+
+activation_manifold:
+  layers: [28]
+
+path_steering:
+  n_extra_pairs: 29
+  batch_size: 128
+  isometry:
+    n_interior_per_pair: 4
