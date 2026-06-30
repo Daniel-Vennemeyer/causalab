@@ -641,13 +641,11 @@ def main(cfg: DictConfig) -> dict[str, Any]:
     transition_edge_count: int | None = None
     transition_hold_fixed: list[str] | None = None
     if behavior_geometry == "precomputed":
-        # Input variable names = the example's input keys minus the result/output
-        # variable. The intervention/target variable (``result``) is the OUTPUT;
-        # the true inputs are entity, number (and template, if present).
-        first_input = train_dataset[0]["input"]
-        input_var_names = [
-            v for v in first_input.keys() if v in task.causal_model.inputs
-        ]
+        # Input variable names come from the causal model (exogenous vars with no
+        # parents — e.g. entity, number). NOTE: ``ex["input"]`` is a CausalTrace,
+        # not a dict — it supports ``trace[var]`` lookup but has no ``.keys()``,
+        # so we enumerate via ``task.causal_model.inputs``.
+        input_var_names = [str(v) for v in task.causal_model.inputs]
         if transition_variable not in input_var_names:
             raise ValueError(
                 f"transition_variable={transition_variable!r} is not an input "
