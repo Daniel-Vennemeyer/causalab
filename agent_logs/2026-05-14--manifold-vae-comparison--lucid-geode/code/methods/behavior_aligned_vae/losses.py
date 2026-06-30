@@ -129,6 +129,7 @@ class LossBundle:
         geometry_distance: str = "euclidean",
         geometry_period: Optional[float] = None,
         activation_targets: Optional[Tensor] = None,
+        geometry_matrix: Optional[Tensor] = None,
     ) -> Tensor:
         """Match the normalized pairwise-distance geometry of intrinsic coords
         ``u`` to a target relational geometry ``d_y``.
@@ -143,10 +144,27 @@ class LossBundle:
             and behavior-free — preserves activation-space neighborhoods in the
             latent. Tests whether the behavioral geometry is already present in
             the activations (recoverable without any topology/label injection).
+          - ``"precomputed"``: ``d_y`` is looked up from a (W, W) relational
+            matrix ``geometry_matrix`` indexed by the per-example class indices
+            ``geometry_coords`` (long/int (B,)). The matrix is built by the
+            analysis layer (e.g. graph distance on the model's behavioral
+            transitions) — NO topology/period/ordering is declared here; the
+            geometry is whatever the matrix encodes. Normalized by its own mean,
+            exactly like the other branches.
           - ``"euclidean"`` (default): ``d_y`` is the normalized Euclidean
             pairwise distance between ``behavior_targets`` (current behavior).
         """
         du = _normalized_pdist(u)
+        if geometry_distance == "precomputed":
+            if geometry_coords is None or geometry_matrix is None:
+                raise ValueError(
+                    "geometry_distance='precomputed' requires geometry_coords "
+                    "(per-example class idx) and geometry_matrix ((W, W))"
+                )
+            coords = geometry_coords.reshape(-1).long()
+            dy_raw = geometry_matrix[coords][:, coords]  # (B, B)
+            dy = dy_raw / dy_raw.mean().clamp_min(_EPS)
+            return ((du - dy) ** 2).mean()
         if geometry_distance == "cyclic" and geometry_coords is not None:
             if geometry_period is None:
                 raise ValueError(
@@ -177,25 +195,32 @@ class LossBundle:
         period: Optional[float] = None,
         margin: float,
         cyclic: bool = True,
+        dist_matrix: Optional[Tensor] = None,
     ) -> Tensor:
         """Supervised-contrastive ordinal loss in RAW latent units.
 
         ``class_idx`` is (B,) int class positions. Pairwise class distance
-        ``cd`` is cyclic (via ``period``) when ``cyclic`` else ``|Δ|``.
+        ``cd`` is taken from ``dist_matrix`` (a (W, W) RAW, integer-valued graph
+        distance looked up by ``class_idx``) when supplied; otherwise it is
+        cyclic (via ``period``) when ``cyclic`` else ``|Δ|``.
         Positives (``cd <= 1``: same/adjacent class) are pulled together
         (``du**2``); negatives (``cd >= 2``) are pushed past ``margin``
         (``relu(margin - du)**2``). ``du = torch.cdist(u, u)`` is NOT
         normalized — ``margin`` is in latent units. The diagonal is excluded;
         an absent positive/negative side contributes 0.
         """
-        c = class_idx.reshape(-1).float()
-        raw = (c.unsqueeze(1) - c.unsqueeze(0)).abs()
-        if cyclic:
-            if period is None:
-                raise ValueError("contrastive_loss cyclic=True requires period")
-            cd = torch.minimum(raw, period - raw)
+        if dist_matrix is not None:
+            idx = class_idx.reshape(-1).long()
+            cd = dist_matrix[idx][:, idx]  # (B, B) RAW graph distance
         else:
-            cd = raw
+            c = class_idx.reshape(-1).float()
+            raw = (c.unsqueeze(1) - c.unsqueeze(0)).abs()
+            if cyclic:
+                if period is None:
+                    raise ValueError("contrastive_loss cyclic=True requires period")
+                cd = torch.minimum(raw, period - raw)
+            else:
+                cd = raw
 
         du = torch.cdist(u, u)
         b = u.shape[0]
@@ -237,6 +262,7 @@ class LossBundle:
         geometry_coords: Optional[Tensor] = None,
         geometry_distance: str = "euclidean",
         geometry_period: Optional[float] = None,
+        geometry_matrix: Optional[Tensor] = None,
         class_idx: Optional[Tensor] = None,
         contrastive_margin: float = 1.0,
     ) -> Tuple[Tensor, Dict[str, float]]:
@@ -286,13 +312,24 @@ class LossBundle:
                     "isometry term enabled (w_isometry != 0) but u not supplied"
                 )
             uses_geometry = (
-                geometry_distance in ("cyclic", "ordinal")
-                and geometry_coords is not None
-            ) or geometry_distance == "activation"
+                (
+                    geometry_distance in ("cyclic", "ordinal")
+                    and geometry_coords is not None
+                )
+                or geometry_distance == "activation"
+                or geometry_distance == "precomputed"
+            )
             if not uses_geometry and behavior_target is None:
                 raise ValueError(
                     "isometry term enabled (w_isometry != 0) but behavior_target "
                     "not supplied for euclidean geometry"
+                )
+            if geometry_distance == "precomputed" and (
+                geometry_coords is None or geometry_matrix is None
+            ):
+                raise ValueError(
+                    "isometry term with geometry_distance='precomputed' "
+                    "requires geometry_coords and geometry_matrix"
                 )
             iso = self.isometry_loss(
                 u,
@@ -301,6 +338,7 @@ class LossBundle:
                 geometry_distance=geometry_distance,
                 geometry_period=geometry_period,
                 activation_targets=h,
+                geometry_matrix=geometry_matrix,
             )
             total = total + self.w_isometry * iso
             metrics["isometry"] = iso.item()
@@ -332,6 +370,11 @@ class LossBundle:
                 period=geometry_period,
                 margin=contrastive_margin,
                 cyclic=(geometry_distance == "cyclic"),
+                dist_matrix=(
+                    geometry_matrix
+                    if geometry_distance == "precomputed"
+                    else None
+                ),
             )
             total = total + self.w_contrastive * con
             metrics["contrastive"] = con.item()

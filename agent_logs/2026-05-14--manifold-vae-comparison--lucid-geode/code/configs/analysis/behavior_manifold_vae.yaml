@@ -16,9 +16,16 @@ loss_weights:
   w_patch: 0.0
   w_contrastive: 0.0
 behavior_distance: hellinger   # kl | hellinger | js
-behavior_geometry: euclidean    # euclidean | cyclic | ordinal | activation  (d_y for isometry; "activation" = label-free, match latent to input-activation distances)
+behavior_geometry: euclidean    # euclidean | cyclic | ordinal | activation | precomputed  (d_y for isometry; "activation" = label-free; "precomputed" = transition-derived (W,W) matrix built in the analysis from the model's behavioral transitions)
 behavior_period: null           # null -> use n_classes (W); 7 for weekdays cyclic
 contrastive_margin: 1.0
+# Transition-derived d_y knobs (only used when behavior_geometry == precomputed):
+# step this ordinal INPUT variable by +1 (others held fixed), read how the model's
+# predicted result class moves, and use graph distance on the transition graph as
+# d_y. NO topology/period/ordering of the RESULT is injected — only that
+# `number` is an ordinal input we can step through.
+transition_variable: number     # discrete ordinal input variable to step by +1
+transition_hold_fixed: null     # null -> all OTHER input vars (e.g. entity); or an explicit list
 train_on_centroids: false
 arm_label: null         # unique per-arm tag for output dir + compare grouping (avoids collisions)
 activation_site: single_final_token

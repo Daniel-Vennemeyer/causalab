@@ -106,6 +106,90 @@ def _per_class_centroids(
     return torch.stack(rows, dim=0), present
 
 
+def _build_transition_dy(
+    task: Any,
+    train_dataset: list,
+    per_example_dists: torch.Tensor,
+    W: int,
+    transition_variable: str,
+    hold_fixed_vars: list[str],
+) -> torch.Tensor | None:
+    """Build a (W, W) relational ``d_y`` from the MODEL's behavioral transitions.
+
+    No topology/period/ordering is injected. We only assume ``transition_variable``
+    is a discrete ordinal input we can step through by +1. The cyclicity (if any)
+    emerges from how the model's *predicted result class* changes under that step.
+
+    Algorithm:
+      1. ``pred_class = per_example_dists[:, :W].argmax(dim=1)`` — the model's
+         predicted result class per example (NOT the true label; this is what
+         makes the geometry behavior-derived). ``per_example_dists`` is row-aligned
+         with ``train_dataset``.
+      2. Map each ``transition_variable`` value to its ordinal position via
+         ``task.causal_model.values[transition_variable]``.
+      3. Group examples by the tuple of ``hold_fixed_vars`` input values. Within a
+         group, for every example whose ``pos + 1`` value also appears in the
+         group, add an undirected edge between their predicted classes (count in a
+         W×W adjacency ``A``).
+      4. Treat any ``A > 0`` as an unweighted edge; graph distance = all-pairs
+         shortest path. Disconnected pairs -> ``W`` (large finite). Diagonal 0.
+
+    Returns a (W, W) float tensor of graph distances, or ``None`` if no unit-step
+    edges were found (caller logs/falls back).
+    """
+    M = per_example_dists.shape[0]
+    if len(train_dataset) != M:
+        raise ValueError(
+            "_build_transition_dy: per_example_dists is not row-aligned with "
+            f"train_dataset (len(train_dataset)={len(train_dataset)} != "
+            f"per_example_dists.shape[0]={M}). They must come from the same "
+            "generate_datasets(seed, config) call."
+        )
+
+    pred_class = per_example_dists[:, :W].argmax(dim=1)  # (M,) MODEL prediction
+
+    order = list(task.causal_model.values[transition_variable])
+    pos = {v: i for i, v in enumerate(order)}
+
+    # Group example indices by the held-fixed input key.
+    groups: dict[tuple, dict[int, int]] = {}
+    for i, ex in enumerate(train_dataset):
+        inp = ex["input"]
+        key = tuple(inp[v] for v in hold_fixed_vars)
+        p = pos[inp[transition_variable]]
+        # Map ordinal position -> predicted class within this group.
+        groups.setdefault(key, {})[p] = int(pred_class[i])
+
+    A = np.zeros((W, W), dtype=np.float64)
+    n_edges = 0
+    for p_to_class in groups.values():
+        for p, c in p_to_class.items():
+            if (p + 1) in p_to_class:
+                c2 = p_to_class[p + 1]
+                A[c, c2] += 1
+                A[c2, c] += 1
+                n_edges += 1
+
+    if n_edges == 0:
+        logger.warning(
+            "transition d_y found no unit-step pairs; returning None. Ensure "
+            "enumerate_all=true and that %r is a discrete ordinal "
+            "transition_variable with adjacent values present in the dataset.",
+            transition_variable,
+        )
+        return None
+
+    # Unweighted graph distance (all-pairs shortest path) on the A>0 edges.
+    from scipy.sparse.csgraph import shortest_path
+
+    adj = (A > 0).astype(np.float64)
+    dist = shortest_path(adj, method="D", directed=False, unweighted=True)
+    # Disconnected pairs -> W (large finite); diagonal stays 0.
+    dist[~np.isfinite(dist)] = float(W)
+    np.fill_diagonal(dist, 0.0)
+    return torch.from_numpy(dist).float()
+
+
 def _resample_path(path: torch.Tensor, num_steps: int) -> torch.Tensor:
     """Linearly resample a ``(P, k)`` path to exactly ``num_steps`` points.
 
@@ -545,6 +629,66 @@ def main(cfg: DictConfig) -> dict[str, Any]:
     # Per-example ordinal class positions; double as contrastive class_idx.
     geometry_coords = cls_idx.float()
 
+    # --- Transition-derived d_y (behavior_geometry == "precomputed") ---------
+    # Build a (W, W) relational matrix from the MODEL's behavioral transitions:
+    # step the ordinal input ``transition_variable`` by +1 (entity/other inputs
+    # held fixed), read how the model's predicted result class moves, and use
+    # graph distance on that transition graph as d_y. The ring (if any) emerges
+    # from the model's +1 behavior — no period/ordering/topology is declared.
+    transition_variable = str(analysis.get("transition_variable", "number"))
+    transition_hold_fixed_cfg = analysis.get("transition_hold_fixed", None)
+    geometry_matrix: torch.Tensor | None = None
+    transition_edge_count: int | None = None
+    transition_hold_fixed: list[str] | None = None
+    if behavior_geometry == "precomputed":
+        # Input variable names = the example's input keys minus the result/output
+        # variable. The intervention/target variable (``result``) is the OUTPUT;
+        # the true inputs are entity, number (and template, if present).
+        first_input = train_dataset[0]["input"]
+        input_var_names = [
+            v for v in first_input.keys() if v in task.causal_model.inputs
+        ]
+        if transition_variable not in input_var_names:
+            raise ValueError(
+                f"transition_variable={transition_variable!r} is not an input "
+                f"variable of the task (inputs: {input_var_names}). The transition "
+                "d_y needs a discrete ordinal INPUT to step through."
+            )
+        if transition_hold_fixed_cfg is not None:
+            transition_hold_fixed = [str(v) for v in transition_hold_fixed_cfg]
+        else:
+            transition_hold_fixed = [
+                v for v in input_var_names if v != transition_variable
+            ]
+
+        om_root = os.path.join(root, "output_manifold")
+        per_example_dists = load_tensor_results(
+            om_root, "per_example_output_dists.safetensors"
+        )["dists"].float()
+        geometry_matrix = _build_transition_dy(
+            task=task,
+            train_dataset=train_dataset,
+            per_example_dists=per_example_dists,
+            W=W,
+            transition_variable=transition_variable,
+            hold_fixed_vars=transition_hold_fixed,
+        )
+        if geometry_matrix is None:
+            raise ValueError(
+                "transition d_y needs unit-step pairs; ensure enumerate_all and a "
+                f"discrete ordinal transition_variable (got {transition_variable!r}, "
+                f"hold_fixed={transition_hold_fixed}). No edges were found."
+            )
+        transition_edge_count = int((geometry_matrix.numpy() == 1.0).sum() // 2)
+        logger.info(
+            "transition d_y built: W=%d, transition_variable=%s, hold_fixed=%s, "
+            "adjacency edges (graph-dist==1 pairs)=%d",
+            W,
+            transition_variable,
+            transition_hold_fixed,
+            transition_edge_count,
+        )
+
     baseline_dir = os.path.join(root, "baseline")
     baseline_path = os.path.join(baseline_dir, "per_class_output_dists.safetensors")
     if os.path.exists(baseline_path):
@@ -560,12 +704,16 @@ def main(cfg: DictConfig) -> dict[str, Any]:
     else:
         logger.warning(
             "Baseline per-class output dists not found at %s; training "
-            "reconstruction + KL only (behavior/isometry/patch weights -> 0).",
+            "reconstruction + KL only (behavior/patch weights -> 0).",
             baseline_path,
         )
         loss_weights["w_behavior"] = 0.0
-        loss_weights["w_isometry"] = 0.0
         loss_weights["w_patch"] = 0.0
+        # The precomputed (transition) isometry geometry does NOT depend on the
+        # baseline behavior targets — its d_y is the transition matrix — so keep
+        # w_isometry. Every other geometry's euclidean d_y needs the targets.
+        if behavior_geometry != "precomputed":
+            loss_weights["w_isometry"] = 0.0
 
     # --- Build the training set ----------------------------------------------
     # Centroid-supervised upper bound: train on per-class mean features (W rows)
@@ -640,6 +788,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         val_geometry_coords=val_geometry_coords,
         geometry_distance=behavior_geometry,
         geometry_period=geometry_period,
+        geometry_matrix=geometry_matrix,
         contrastive_margin=contrastive_margin,
     )
     manifold = result["manifold"]
@@ -983,6 +1132,13 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         "behavior_geometry": behavior_geometry,
         "train_on_centroids": train_on_centroids,
         "w_contrastive": loss_weights["w_contrastive"],
+        "transition_variable": (
+            transition_variable if behavior_geometry == "precomputed" else None
+        ),
+        "transition_hold_fixed": (
+            transition_hold_fixed if behavior_geometry == "precomputed" else None
+        ),
+        "transition_edge_count": transition_edge_count,
     }
     # Patched behavioral-axis scores (only present when patch_eval=true). Use the
     # SAME keys as the spline so both arms populate the same compare columns.
@@ -1008,6 +1164,13 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         "behavior_period": geometry_period,
         "contrastive_margin": contrastive_margin,
         "train_on_centroids": train_on_centroids,
+        "transition_variable": (
+            transition_variable if behavior_geometry == "precomputed" else None
+        ),
+        "transition_hold_fixed": (
+            transition_hold_fixed if behavior_geometry == "precomputed" else None
+        ),
+        "transition_edge_count": transition_edge_count,
         "ckpt_format": ckpt_format,
         "model": cfg.model.name,
         "task": cfg.task.name,

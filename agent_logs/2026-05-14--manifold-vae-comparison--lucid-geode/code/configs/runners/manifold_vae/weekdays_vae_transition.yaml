@@ -1,0 +1,42 @@
+# @package _global_
+# Priority sweep — DISCOVER the weekday ring without injecting topology. Instead
+# of a hand-coded cyclic d_y, derive the relational target from the MODEL's
+# behavioral transitions: step the ordinal input `number` by +1 (entity held
+# fixed), read how the model's predicted result class moves, build a class->class
+# transition graph, and use graph distance as d_y (behavior_geometry=precomputed).
+# The cyclicity emerges from the model's +1 behavior — NO period/ordering/topology
+# of the result is declared. Run against the SAME --experiment-root as
+# weekdays_current_spline.
+defaults:
+  - /base
+  - /task: natural_domains_arithmetic_weekdays
+  - /model: llama31_8b
+  - /analysis/behavior_manifold_vae
+  - _self_
+
+task:
+  target_variable: result
+
+behavior_manifold_vae:
+  method: flat_vae
+  topology: unstructured
+  metric: latent_linear
+  latent_dim: 2
+  n_charts: 1
+  layers: [28]
+  token_positions: [last_token]
+  loss_weights:
+    w_recon: 1.0
+    w_kl: 0.01
+    w_behavior: 0.0
+    w_isometry: 5.0
+    w_geodesic: 0.0
+    w_patch: 0.0
+    w_contrastive: 2.0
+  behavior_geometry: precomputed
+  transition_variable: number
+  transition_hold_fixed: null
+  contrastive_margin: 1.0
+  patch_eval: false
+  device: cpu
+  arm_label: transition

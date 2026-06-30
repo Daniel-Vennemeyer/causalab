@@ -61,6 +61,7 @@ def train_behavior_aligned_vae(
     val_geometry_coords: Optional[Tensor] = None,
     geometry_distance: str = "euclidean",
     geometry_period: Optional[float] = None,
+    geometry_matrix: Optional[Tensor] = None,
     contrastive_margin: float = 1.0,
 ) -> Dict[str, Any]:
     """Train a behavior-aligned VAE and return in-memory artifacts.
@@ -79,9 +80,15 @@ def train_behavior_aligned_vae(
         val_features, val_behavior_targets: optional validation tensors.
         geometry_coords: optional per-example (N,) ordinal class index used by
             the cyclic/ordinal isometry geometry and the contrastive loss.
-        geometry_distance: "euclidean" (default) | "cyclic" | "ordinal" — the
-            relational distance d_y for the isometry loss.
+        geometry_distance: "euclidean" (default) | "cyclic" | "ordinal" |
+            "activation" | "precomputed" — the relational distance d_y for the
+            isometry loss.
         geometry_period: period for cyclic geometry/contrastive (e.g. 7).
+        geometry_matrix: optional global (W, W) relational distance matrix used
+            when geometry_distance == "precomputed". It is NOT per-batch — the
+            loss looks it up by the per-batch ``geometry_coords`` class indices
+            (and by ``class_idx`` for the contrastive term). Moved to device
+            once and passed as-is.
         contrastive_margin: latent-unit margin for the contrastive loss.
 
     Returns:
@@ -103,6 +110,8 @@ def train_behavior_aligned_vae(
         behavior_targets = behavior_targets.to(dev).float()
     if geometry_coords is not None:
         geometry_coords = geometry_coords.to(dev)
+    if geometry_matrix is not None:
+        geometry_matrix = geometry_matrix.to(dev).float()
 
     mean, std = _standardize_stats(features)
     features_norm = (features - mean) / (std + _EPS)
@@ -233,6 +242,7 @@ def train_behavior_aligned_vae(
                 geometry_coords=geom_batch,
                 geometry_distance=geometry_distance,
                 geometry_period=geometry_period,
+                geometry_matrix=geometry_matrix,
                 class_idx=geom_batch,
                 contrastive_margin=contrastive_margin,
             )
@@ -268,6 +278,7 @@ def train_behavior_aligned_vae(
                 geometry_coords=val_geometry_coords,
                 geometry_distance=geometry_distance,
                 geometry_period=geometry_period,
+                geometry_matrix=geometry_matrix,
                 contrastive_margin=contrastive_margin,
             )
             for key, val in val_metrics.items():
@@ -301,6 +312,7 @@ def train_behavior_aligned_vae(
         "intrinsic_dim": model.intrinsic_dim,
         "geometry_distance": geometry_distance,
         "geometry_period": geometry_period,
+        "geometry_matrix_provided": geometry_matrix is not None,
         "contrastive_margin": contrastive_margin,
     }
 
@@ -324,6 +336,7 @@ def _evaluate(
     geometry_coords: Optional[Tensor] = None,
     geometry_distance: str = "euclidean",
     geometry_period: Optional[float] = None,
+    geometry_matrix: Optional[Tensor] = None,
     contrastive_margin: float = 1.0,
 ) -> Dict[str, float]:
     model.eval()
@@ -355,6 +368,7 @@ def _evaluate(
             geometry_coords=geometry_coords,
             geometry_distance=geometry_distance,
             geometry_period=geometry_period,
+            geometry_matrix=geometry_matrix,
             class_idx=geometry_coords,
             contrastive_margin=contrastive_margin,
         )
