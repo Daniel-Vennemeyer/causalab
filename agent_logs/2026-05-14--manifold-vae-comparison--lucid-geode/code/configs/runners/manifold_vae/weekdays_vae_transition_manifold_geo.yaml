@@ -1,0 +1,59 @@
+# @package _global_
+# Close the residual steering gap by fixing PATH ROUTING, not decoding.
+#
+# transition_manifold proved w_manifold gives an on-manifold decoder: patched
+# distance dropped 1.26 -> 0.99 and coherence matched the spline (0.77 vs 0.78).
+# But the project-to-data crutch (snap every decoded point to a REAL activation)
+# still only reached 0.77, not the spline's 0.33 -- so the residual gap is the
+# PATH itself: transition_manifold interpolates STRAIGHT LINES between centroids
+# in latent space, while the spline geodesic follows the data.
+#
+# This arm = transition_manifold's exact (now-working) loss block, changing ONLY
+# the metric to decoder_pullback so the PATCHED path is a solved pullback geodesic
+# (G_h = J^T J) instead of a latent straight line. transition_dpb tried this but
+# its decoder was off-manifold (no w_manifold) and it got WORSE (1.43); now that
+# w_manifold pulls decoded interpolants on-manifold, the pullback metric should
+# reflect the data geometry and route the path THROUGH the data. Single-variable
+# A/B vs transition_manifold: metric latent_linear -> decoder_pullback.
+#
+# (w_geodesic stays 0: the training loop passes decoded_path=None, so that term
+# is a no-op. Path routing is governed entirely by `metric` at patch time.)
+defaults:
+  - /base
+  - /task: natural_domains_arithmetic_weekdays
+  - /model: llama31_8b
+  - /analysis/behavior_manifold_vae
+  - _self_
+
+task:
+  target_variable: result
+
+behavior_manifold_vae:
+  method: flat_vae
+  topology: unstructured
+  metric: decoder_pullback   # CHANGED from latent_linear: patched path = pullback geodesic
+  latent_dim: 2
+  n_charts: 1
+  layers: [28]
+  token_positions: [last_token]
+  behavior_geometry: precomputed
+  transition_variable: number
+  contrastive_margin: 1.0
+  loss_weights:
+    w_recon: 0.2
+    w_kl: 0.01
+    w_behavior: 0.0
+    w_isometry: 2.0
+    w_geodesic: 0.0
+    w_patch: 0.0
+    w_contrastive: 2.0
+    w_centroid_iso: 5.0
+    w_compactness: 1.0
+    w_manifold: 1.0       # on-manifold decoder (proven in transition_manifold)
+  geodesic:
+    n_points: 16
+    n_iters: 100
+    lr: 0.05
+  patch_eval: true        # measure steering directly (the point of this arm)
+  device: cpu
+  arm_label: transition_manifold_geo
