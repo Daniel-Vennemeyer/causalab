@@ -288,9 +288,19 @@ def main(cfg: DictConfig) -> dict[str, Any]:
     final_metrics = result["final_metrics"]
 
     # --- Output directory ----------------------------------------------------
+    # Encode loss_set in the path so a recon-only and a behavior-aligned arm with
+    # otherwise-identical descriptors (method/topology/metric/charts/seed) do not
+    # write to the same directory and clobber each other.
+    _lw = analysis.loss_weights
+    _loss_set = (
+        "behavior_aligned"
+        if (float(_lw.get("w_behavior", 0.0)) > 0.0 or float(_lw.get("w_isometry", 0.0)) > 0.0)
+        else "recon_only"
+    )
     arm_sub = (
         f"{analysis.method}_topo-{analysis.topology}"
-        f"_metric-{analysis.metric}_charts{analysis.n_charts}_seed{cfg.seed}"
+        f"_metric-{analysis.metric}_charts{analysis.n_charts}"
+        f"_loss-{_loss_set}_seed{cfg.seed}"
     )
     out_dir = os.path.join(
         root, "behavior_manifold_vae", ss_sub, f"L{layer}_{token_position}", arm_sub

@@ -1,0 +1,33 @@
+# @package _global_
+# Priority sweep — Ablation 2: single chart vs atlas (multi-chart).
+# Behavior-aligned atlas VAE with K=4 charts + behavior-pullback metric. On a
+# clean S1 domain the atlas may not help over a single chart (capacity-matched
+# comparison is the read). Reuses the shared-root spline cache.
+defaults:
+  - /base
+  - /task: natural_domains_arithmetic_weekdays
+  - /model: llama31_8b
+  - /analysis/behavior_manifold_vae
+  - _self_
+
+task:
+  target_variable: result
+
+behavior_manifold_vae:
+  method: atlas_vae
+  topology: unstructured
+  metric: behavior_pullback
+  latent_dim: 2
+  n_charts: 4
+  layers: [28]
+  token_positions: [last_token]
+  loss_weights:
+    w_recon: 1.0
+    w_kl: 0.1
+    w_behavior: 1.0
+    w_isometry: 1.0
+    w_geodesic: 0.0
+    w_patch: 0.0
+  behavior_distance: hellinger
+  patch_eval: false
+  device: cpu
