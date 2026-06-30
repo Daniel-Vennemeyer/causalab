@@ -21,9 +21,19 @@ SEEDS="${SEEDS:-0 1 2}"
 DEVICE="${DEVICE:-cpu}"          # VAE/geodesic compute (tiny); the 8B model is device=auto -> GPU
 CUDA="${CUDA_VISIBLE_DEVICES:-3}"
 # GPU throughput knob: 8B forward batch for path_steering (baseline) AND the VAE
-# patch eval. Bigger = fewer batches = better GPU util. 256 is a safe default on
-# an 8B over short prompts; raise to 384/512 if the GPU has headroom, lower if OOM.
+# patch eval. NOTE: collect_grid_distributions (causalab/methods/steer/collect.py)
+# rebuilds the pyvene intervention PER path step and batches only the n_prompts
+# (16) base prompts within a step — so raising BATCH past ~16 barely changes util
+# or wall-clock for this metric. Left tunable but it is NOT the speed lever here.
 BATCH="${BATCH:-256}"
+# THE speed lever: number of points along each patched path. Each step is a
+# separate pyvene intervention (setup + CPU<->GPU module shuffle), so wall-clock
+# is ~linear in PATH_STEPS. This sets BOTH the spline (num_steps_along_path) and
+# the VAE (patch_num_steps) so the distance-from-behavior-manifold metric — which
+# SUMS along the path — stays comparable between them. 50 = full fidelity (matches
+# weekdays); 25 ~2x faster, 20 ~2.5x, with the within-domain VAE-vs-spline gap
+# still valid (only the absolute scale changes vs the weekdays numbers).
+PATH_STEPS="${PATH_STEPS:-50}"
 
 REPO_ROOT="$(pwd)"
 SESSION_DIR="${REPO_ROOT}/agent_logs/${SESSION}"
@@ -45,7 +55,7 @@ DOMAINS="${DOMAINS:-months alphabet age}"
 
 # count for the [i/N] progress banner
 n_total=0; for _d in ${DOMAINS}; do n_total=$((n_total+1)); done
-echo "Domains: ${DOMAINS}   GPU=${CUDA}   BATCH=${BATCH}   SEEDS=${SEEDS}"
+echo "Domains: ${DOMAINS}   GPU=${CUDA}   BATCH=${BATCH}   PATH_STEPS=${PATH_STEPS}   SEEDS=${SEEDS}"
 echo
 
 i_dom=0
@@ -61,7 +71,7 @@ for dom in ${DOMAINS}; do
   # path_steering exists only in the full spline runners (months/alphabet), not in
   # age_discovery_baseline — pass the GPU batch override only when applicable.
   STEER_OVERRIDE=""
-  case "${SPLINE}" in *current_spline) STEER_OVERRIDE="path_steering.batch_size=${BATCH}";; esac
+  case "${SPLINE}" in *current_spline) STEER_OVERRIDE="path_steering.batch_size=${BATCH} path_steering.num_steps_along_path=${PATH_STEPS}";; esac
 
   # 1) Baseline / spline pipeline (loads the 8B model on GPU; produces the cache).
   #    Streamed live via `tee` so path_steering's tqdm bars are visible; GPU pinned.
@@ -81,7 +91,7 @@ for dom in ${DOMAINS}; do
   echo ">>> [${i_dom}/${n_total}] arms: ${ARMS}  (PATCH=${PATCHFLAG}, BATCH=${BATCH})"
   TASK_DIRNAME="${TDIR}" PATCH="${PATCHFLAG}" CUDA_VISIBLE_DEVICES="${CUDA}" \
     DEVICE="${DEVICE}" ARMS="${ARMS}" SEEDS="${SEEDS}" BATCH="${BATCH}" \
-    ${JOBS_ENV:+JOBS=$JOBS_ENV} \
+    PATH_STEPS="${PATH_STEPS}" ${JOBS_ENV:+JOBS=$JOBS_ENV} \
     bash "${SESSION_DIR}/run/sweep.sh"
 done
 

@@ -50,12 +50,23 @@ if [ "${PATCH:-0}" = "1" ]; then
   echo "PATCH=1 -> patch_eval=true (loads the 8B model)"
 fi
 
-# GPU throughput: override the patch-eval 8B forward batch size. Bigger = fewer
-# batches = better GPU util. Only affects the patch path (the 8B forwards).
+# GPU throughput: override the patch-eval 8B forward batch size. NOTE: each path
+# step is a separate pyvene intervention batching only n_prompts (16), so BATCH
+# above ~16 barely moves util/wall-clock for this metric — kept for completeness.
 BATCH_OVERRIDE=""
 if [ -n "${BATCH:-}" ]; then
   BATCH_OVERRIDE="behavior_manifold_vae.patch_batch_size=${BATCH}"
   echo "BATCH=${BATCH} -> patch_batch_size=${BATCH}"
+fi
+
+# THE speed lever: points along each patched path (wall-clock ~linear in this).
+# MUST match the spline's path_steering.num_steps_along_path so the summed
+# distance-from-behavior-manifold metric stays comparable (launch_generalization.sh
+# sets both from PATH_STEPS).
+STEPS_OVERRIDE=""
+if [ -n "${PATH_STEPS:-}" ]; then
+  STEPS_OVERRIDE="behavior_manifold_vae.patch_num_steps=${PATH_STEPS}"
+  echo "PATH_STEPS=${PATH_STEPS} -> patch_num_steps=${PATH_STEPS}"
 fi
 
 # Seeds to run per arm (space-separated). Default 42 (matches base.yaml).
@@ -114,14 +125,14 @@ run_one() {  # run_one <arm> <seed>
     # serial → stream live so the in-run tqdm progress bars are visible, tee to log
     ./scripts/run_exp.sh --experiment-root "${EXP_ROOT}" "${arm}" \
       model="${MODEL}" seed="${seed}" behavior_manifold_vae.device="${DEVICE}" \
-      ${PATCH_OVERRIDE:+$PATCH_OVERRIDE} ${BATCH_OVERRIDE:+$BATCH_OVERRIDE} \
+      ${PATCH_OVERRIDE:+$PATCH_OVERRIDE} ${BATCH_OVERRIDE:+$BATCH_OVERRIDE} ${STEPS_OVERRIDE:+$STEPS_OVERRIDE} \
       ${GEO_OVERRIDE:+$GEO_OVERRIDE} 2>&1 | tee "${log}"
     rc=${PIPESTATUS[0]}
   else
     # parallel → quiet to log (interleaved live bars would be unreadable)
     ./scripts/run_exp.sh --experiment-root "${EXP_ROOT}" "${arm}" \
       model="${MODEL}" seed="${seed}" behavior_manifold_vae.device="${DEVICE}" \
-      ${PATCH_OVERRIDE:+$PATCH_OVERRIDE} ${BATCH_OVERRIDE:+$BATCH_OVERRIDE} \
+      ${PATCH_OVERRIDE:+$PATCH_OVERRIDE} ${BATCH_OVERRIDE:+$BATCH_OVERRIDE} ${STEPS_OVERRIDE:+$STEPS_OVERRIDE} \
       ${GEO_OVERRIDE:+$GEO_OVERRIDE} > "${log}" 2>&1 || rc=$?
   fi
   if [ "${rc}" = "0" ]; then
@@ -132,7 +143,7 @@ run_one() {  # run_one <arm> <seed>
   fi
 }
 export -f run_one
-export EXP_ROOT MODEL DEVICE LOG_DIR PATCH_OVERRIDE BATCH_OVERRIDE GEO_OVERRIDE JOBS
+export EXP_ROOT MODEL DEVICE LOG_DIR PATCH_OVERRIDE BATCH_OVERRIDE STEPS_OVERRIDE GEO_OVERRIDE JOBS
 
 # Run all (arm, seed) combos with up to JOBS concurrent workers (xargs -P is
 # portable across bash versions; runs are independent so this just hides the
