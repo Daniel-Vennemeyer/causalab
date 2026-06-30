@@ -34,3 +34,4 @@ behavior_manifold_vae:
   contrastive_margin: 1.0
   patch_eval: false
   device: cpu
+  arm_label: cyclic

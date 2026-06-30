@@ -34,3 +34,4 @@ behavior_manifold_vae:
     w_patch: 0.0
   patch_eval: false
   device: cpu
+  arm_label: recon_only

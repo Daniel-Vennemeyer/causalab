@@ -20,6 +20,7 @@ behavior_geometry: euclidean    # euclidean | cyclic | ordinal  (d_y for the iso
 behavior_period: null           # null -> use n_classes (W); 7 for weekdays cyclic
 contrastive_margin: 1.0
 train_on_centroids: false
+arm_label: null         # unique per-arm tag for output dir + compare grouping (avoids collisions)
 activation_site: single_final_token
 patch_eval: false
 patch_n_prompts: 16        # base prompts per pair for patched scoring

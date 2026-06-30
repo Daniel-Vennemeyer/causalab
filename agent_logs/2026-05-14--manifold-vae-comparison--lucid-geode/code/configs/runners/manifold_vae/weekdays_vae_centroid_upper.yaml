@@ -36,3 +36,4 @@ behavior_manifold_vae:
   batch_size: 7
   patch_eval: false
   device: cpu
+  arm_label: centroid_upper

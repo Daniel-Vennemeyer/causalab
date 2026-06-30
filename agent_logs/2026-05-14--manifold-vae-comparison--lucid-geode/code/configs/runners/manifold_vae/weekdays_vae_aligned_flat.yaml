@@ -31,3 +31,4 @@ behavior_manifold_vae:
   behavior_distance: hellinger
   patch_eval: false
   device: cpu
+  arm_label: aligned_flat

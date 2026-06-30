@@ -33,3 +33,4 @@ behavior_manifold_vae:
   behavior_geometry: euclidean
   patch_eval: false
   device: cpu
+  arm_label: strong
