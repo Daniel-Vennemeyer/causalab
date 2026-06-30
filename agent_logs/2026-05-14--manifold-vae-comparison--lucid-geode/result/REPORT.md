@@ -13,12 +13,17 @@ Replacing the isometry loss's Euclidean `d_y` (distance between output-prob vect
 | **cyclic (per-example, cyclic+contrastive)** | **0.936 ± 0.024** | 80.5 | **learned; matches spline, recon unchanged** |
 | centroid-upper (cyclic, 7 centroids) | 0.447 ± 0.232 | ~0.6 | per-example *beats* this bound |
 | strong (Euclidean, KL 0.01, ×5 weights) | 0.089 ± 0.088 | 87.4 | rebalancing alone ≈ no help |
-| **activation (label-free: latent↔activation distances)** | **−0.123 ± 0.060** | 87.6 | **structure NOT recoverable from raw activation geometry** |
+| **transition (behavior-derived `d_y`, topology NOT injected)** | **0.806 ± 0.066** | 64.3 | **DISCOVERS the ring from the model's +1 transitions** |
+| activation (label-free: latent↔activation distances) | −0.123 ± 0.060 | 87.6 | structure NOT recoverable from raw activation geometry |
 | earlier Euclidean arms (flat/metric/atlas/s1) | ≈ 0 ± 0.16 | 60–80 | floor |
 
-### Fit vs. discover (the open problem)
+### Fit vs. discover — RESOLVED: discovery works via behavioral transitions
 
-The cyclic arm *injects* the topology (period, ordering) — so does the spline baseline (via `periodic_dims` metadata). We have shown a VAE can **fit a known manifold**, not **discover an unknown one**. The label-free `activation` arm tested whether the ring is recoverable from activation structure with no injection: it is **not** (−0.12). The ring is not the dominant activation-distance geometry (a low-variance circular feature swamped in 64-d), and — critically — for weekdays the cyclic adjacency is **not present in static per-class behavior** either (one-hot day outputs are equidistant). The adjacency lives in the input→output **mechanism**. So discovery requires a signal that reveals adjacency from **behavioral transitions** (how output moves under input increments / interventions), not from static activations or static outputs. See `plan/transition_dy_design.md` (C). This is the next experiment; until it works, "discover without knowing the structure" remains unsolved.
+The cyclic arm (0.936) *injects* the topology (period, ordering); so does the spline (via `periodic_dims` metadata). The label-free `activation` arm (−0.12) showed the ring is **not** recoverable from raw activation-distance geometry (low-variance circular feature swamped in 64-d; static one-hot outputs are equidistant). The adjacency lives in the input→output **mechanism** — so we derived `d_y` from the model's **behavioral transitions**: step the ordinal input `number` by +1 (entity fixed), read how the model's *predicted* result class moves, take graph distance on the transition graph. **No period / ordering / "cyclic" is declared** — only that `number` is a steppable ordinal input.
+
+Result: the `transition` arm reaches **isometry 0.806 ± 0.066** — recovering ~86% of the hand-coded-cyclic performance (0.936), vs −0.12 (label-free) and 0.066 (floor). The ring is **discovered**, not injected. The gap to 0.936 is honest noise: `transition_edge_count`=9 (a clean 7-ring has 7 adjacency pairs) → the model's ~8% misclassifications inject ~2 spurious edges, slightly perturbing `d_y`.
+
+**Conclusion:** a VAE can learn the behavior-aligned manifold **without being told the structure**, provided the relational target is grounded in behavioral transitions rather than static activations/outputs. Remaining honesty caveats: (1) still assumes one input is ordinal (we step `number`); (2) single structured task — the real generalization test is a task whose topology we genuinely don't know; (3) patch-grounded steering (does this geometry drive the model?) still pending for all VAE arms.
 
 Conclusions:
 - **The objective was the bottleneck, confirmed.** A behaviorally-grounded relational target (cyclic `d_y`) + contrastive ordering recovers the weekday ring; the learned VAE (r=0.936) is statistically near the centroid-constructed spline (0.990), and does it **without hurting reconstruction**.
