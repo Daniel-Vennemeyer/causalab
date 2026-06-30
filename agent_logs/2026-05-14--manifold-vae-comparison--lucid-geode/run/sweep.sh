@@ -66,6 +66,18 @@ DEVICE="${DEVICE:-cuda}"
 JOBS="${JOBS:-4}"
 if [ "${PATCH:-0}" = "1" ]; then JOBS=1; fi
 
+# CRITICAL for parallel CPU runs: PyTorch/BLAS default to ALL cores per process,
+# so JOBS parallel workers each grab every core → hundreds of threads thrash the
+# node and a 2s job takes 30+ min. Cap threads PER worker so total ≈ THREADS×JOBS
+# stays sane. 1 thread/worker is plenty here (tiny tensors); raise THREADS if you
+# lower JOBS. Honors a pre-set value if you exported one.
+THREADS="${THREADS:-1}"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-$THREADS}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-$THREADS}"
+export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-$THREADS}"
+export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-$THREADS}"
+export TOKENIZERS_PARALLELISM=false
+
 # Optional: cap geodesic-solver iterations (the metric arms' dominant compute —
 # ~10s at the config default of 100). GEO_ITERS=40 ≈ 2.5x faster for those arms
 # with negligible path-quality loss on a 2-D latent. Empty = use the config.
@@ -75,7 +87,7 @@ if [ -n "${GEO_ITERS:-}" ]; then
 fi
 
 n_runs=$(( ${#ARMS[@]} * ${#SEEDS_ARR[@]} ))
-echo "DEVICE = ${DEVICE}   JOBS = ${JOBS}   runs = ${n_runs} (${#ARMS[@]} arms × ${#SEEDS_ARR[@]} seeds)"
+echo "DEVICE = ${DEVICE}   JOBS = ${JOBS}   THREADS/worker = ${THREADS}   runs = ${n_runs} (${#ARMS[@]} arms × ${#SEEDS_ARR[@]} seeds)"
 [ -n "${GEO_OVERRIDE}" ] && echo "GEO override: ${GEO_OVERRIDE}"
 echo
 
