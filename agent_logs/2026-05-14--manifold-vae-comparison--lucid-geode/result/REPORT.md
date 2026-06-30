@@ -1,7 +1,7 @@
 # Manifold-VAE comparison — Debug/baseline milestone report
 
 **Session:** `2026-05-14--manifold-vae-comparison--lucid-geode`
-**Status:** Debug pass + **priority sweep complete** (7 arms: spline ceiling, recon-only floor, and 5 behavior-aligned arms covering ablations 2/3/4a/4b/6). Single seed, weekdays only. Patch-grounded behavior metrics for the VAE are NOT yet computed (`patch_eval=false`).
+**Status:** Debug pass + **priority sweep complete, 6 seeds** (spline ceiling, recon-only floor, 5 behavior-aligned arms covering ablations 2/3/4a/4b/6). Weekdays only. Headline: all behavior-aligned VAE arms isometry ≈ 0 ± 0.16 vs spline 0.99. Patch-grounded behavior metrics for the VAE NOT yet computed (`patch_eval=false`).
 **Run:** Llama-3.1-8B on `tars` (GPU 3); artifacts under `/data/jiang/vennemdp/causalab/<session>/artifacts/natural_domains_arithmetic_weekdays/llama31_8b/weekdays/`.
 
 > Note: written from the run logs + result artifacts (metrics/CSV/JSON). Figures live on `/data` on tars and are referenced by path, not embedded. For a figure-embedded report, run `/interpret-experiment` on tars where the artifacts resolve.
@@ -58,34 +58,31 @@ Reading: the spline's manifold geodesics stay ~4× closer to the behavior manifo
 
 **Headline (debug):** a reconstruction-only VAE recovers activation *density* but essentially **none of the behavior-aligned geometry** — isometry ≈ 0 vs the spline's ≈ 1.
 
-## Priority sweep results (5 behavior-aligned arms)
+## Priority sweep results — 6 seeds (0,1,2,3,4,42), mean ± std
 
-All weekdays, L28, seed 42, shared root. `metric_vae` trains the *same* VAE as `flat_vae`; the `metric` knob only changes the geodesic used to score isometry — so the three rows with identical recon/kl/behavior (76.92 / 5.87 / 0.357) are a **controlled metric ablation on one fixed manifold**.
+All weekdays, L28, shared root. `metric_vae` trains the *same* VAE as `flat_vae` (only the geodesic metric scoring isometry differs). **With seeds, the picture from the single-seed run collapses.**
 
-| arm | recon | kl | behavior_dist | isometry r | geo-nat |
-|---|---|---|---|---|---|
-| spline (ceiling) | — | — | — | **0.990** | — |
-| flat, recon-only (floor) | 72.2 | 5.92 | — | 0.066 | 9.68 |
-| flat, aligned, latent-linear | 76.9 | 5.87 | 0.357 | 0.204 | 9.25 |
-| metric, aligned, decoder-pullback | 76.9 | 5.87 | 0.357 | **0.244** | 9.41 |
-| metric, aligned, behavior-pullback | 76.9 | 5.87 | 0.357 | 0.171 | 8.87 |
-| atlas (K=4), aligned, behavior-pullback | 64.8 | 5.81 | 0.335 | −0.027 | 8.05 |
-| flat, aligned, **S¹** topology | **60.7** | 3.59 | 0.330 | −0.274 | 11.07 |
+| arm | isometry r (mean ± std) | recon | behavior_dist |
+|---|---|---|---|
+| spline (ceiling, n=1) | **0.990** | — | — |
+| flat, recon-only (floor, n=1) | 0.066 | 72.2 | — |
+| flat, aligned, latent-linear | **0.001 ± 0.160** | 77.6 | 0.33 |
+| metric, aligned, decoder-pullback | **0.005 ± 0.168** | 77.6 | 0.33 |
+| metric, aligned, behavior-pullback | **0.032 ± 0.183** | 77.6 | 0.33 |
+| atlas (K=4), aligned, behavior-pullback | **0.039 ± 0.159** | 65.8 | 0.37 |
+| flat, aligned, **S¹** topology | **−0.058 ± 0.159** | **61.3** | 0.31 |
 
-Findings (read against the caveats below):
-- **Behavior alignment helps** the flat VAE: isometry 0.066 → 0.204.
-- **Metric (Ablation 4):** decoder-pullback (0.244) > latent-linear (0.204) > behavior-pullback (0.171) — opposite of the H3 expectation that behavior-pullback is more faithful.
-- **Atlas (Ablation 2):** no benefit on clean S¹ (≈0), as expected.
-- **Known S¹ topology (Ablation 6):** best reconstruction (60.7, lowest KL 3.59) but **worst isometry (−0.27)** — the circle fits the cyclic density, but the 7 classes are ordered around it in a non-behavior-aligned way.
-- **No VAE arm approaches the spline's 0.99** on the isometry proxy.
+**The decisive finding:** every behavior-aligned VAE arm has isometry **r ≈ 0 with std ≈ 0.16–0.18** — statistically indistinguishable from zero, from each other, *and from the recon-only floor (0.066)*. The seed-to-seed spread (±0.16) dwarfs every difference, so the single-seed "results" (0.204 / 0.244 / 0.171 / −0.27) were **pure noise**. The spline sits at 0.99 (deterministic). The VAE's *expected* behavioral-geometry alignment on this task is ≈ 0.
 
-## Hypothesis assessment
+## Hypothesis assessment (with seeds)
 
-- **H1** (recon-only flat VAE less behaviorally natural than spline): **Supported** at the geometry level — isometry 0.066 ≪ 0.990.
-- **H2** (behavior-aligned training improves over recon-only): **Weakly supported** — 0.066 → 0.204 isometry, but the absolute level stays far below the spline and the effect size is within plausible single-seed noise.
-- **H3** (behavior-pullback metric more faithful than decoder-pullback): **Not supported (provisionally refuted)** — decoder-pullback scored higher (0.244 vs 0.171). Differences are within noise; needs seeds.
-- **H4** (atlas helps): **Not supported on weekdays** — atlas ≈ 0 isometry; expected (clean S¹ needs no atlas). Re-test on 2D graph_walk.
-- **Bonus (topology):** imposing S¹ aids *density* (recon/KL) but **not** behavior-ordering — a clean, interpretable negative.
+- **H1** (recon-only flat VAE less behaviorally natural than spline): **Supported** — VAE ≈ 0 ≪ spline 0.99.
+- **H2** (behavior-aligned training beats recon-only): **NOT supported** — behavior-aligned mean (0.00–0.04) ≈ the recon-only floor (0.066), all within ±0.16. The single-seed 0.204 "gain" was noise. **Behavior prediction + Euclidean-`d_y` isometry loss does not produce behavior-aligned latent geometry.**
+- **H3** (behavior-pullback > decoder-pullback metric): **No effect** — 0.032 vs 0.005, both ≈ 0 ± 0.17. Indistinguishable.
+- **H4** (atlas helps): **No effect** — 0.039 ± 0.16, ≈ 0.
+- **Topology (S¹)**: best reconstruction (61.3, lowest KL) but isometry −0.058 ± 0.16 ≈ 0. Imposing the circle aids *density*, not behavioral ordering.
+
+**Bottom line:** on weekdays, **none of the objective/metric/topology/atlas variants move the learned manifold's isometry off zero.** This sharply confirms the standing diagnosis — the current objective is too weak to force global behavioral geometry — and vindicates running seeds (every single-seed ranking was an artifact). Two things must still be checked before calling the *method* a failure (vs the metric/data): the **patch-grounded** behavioral comparison (does VAE steering produce coherent behavior despite low isometry?) and the **latent plots** (what failure mode — scramble, clusters, fold?).
 
 ## Success criteria
 
@@ -97,7 +94,7 @@ Findings (read against the caveats below):
 
 ## Caveats & fairness (these materially limit the conclusions)
 
-1. **Single seed, 21 class-pairs.** Isometry is a Pearson r over W·(W−1)/2 = 21 pairs. Differences among the aligned arms (0.171 / 0.204 / 0.244) and the negatives (≈ 0 for atlas/S¹) are very likely **within noise**. No ranking of metrics/topologies is trustworthy until we have multiple seeds with error bars.
+1. ~~Single seed~~ **RESOLVED — 6 seeds run.** The std (±0.16–0.18) confirms every single-seed difference was noise; all behavior-aligned arms are ≈ 0. (Isometry r is over only 21 class-pairs, hence the large per-seed variance.)
 2. **The isometry comparison is stacked toward the spline.** Its control points *are* the class centroids, so it is structurally near-1; the VAE must *learn* that ordering from 49 examples. Isometry alone is therefore a weak basis for "spline beats VAE."
 3. **The VAE is compared only on the geometry proxy.** The behavior-grounded path metrics (coherence, distance-from-behavior-manifold) that the spline scores well on come from *patching steered paths into the model*. With `patch_eval=false` we have none for the VAE — so the apples-to-apples behavioral comparison is **missing**, not lost.
 4. **Tiny data.** 49 enumerated inputs / 7 classes; the behavior head (behavior_dist ≈ 0.33–0.36) is weak. Reconstruction is not cross-comparable across arms (VAE feature-MSE vs spline output-KL).
@@ -112,11 +109,12 @@ Findings (read against the caveats below):
 
 ## Provisional conclusion
 
-On weekdays, behavior-aligned training gives the VAE a **modest** isometry gain over recon-only (0.066 → ~0.20), but **no VAE arm recovers the behavior-aligned geometry the way the centroid-constructed spline does**, and the most "principled" knobs (behavior-pullback metric, imposed S¹) did **not** help the geometry proxy — S¹ even improved density while *hurting* behavior-ordering. Per the plan's success criteria, this is a useful (partly negative) result: it cleanly localizes where the added components fail to help on a clean structured domain. **But** conclusions are gated by single-seed noise, a spline-favoring proxy metric, and the absence of patch-grounded behavior metrics for the VAE (caveats above). This is suggestive, not yet decisive.
+Across 6 seeds, **every** behavior-aligned VAE variant has isometry ≈ 0 (±0.16) — indistinguishable from each other and from the recon-only floor — versus the spline's 0.99. Behavior-alignment, behavior-pullback geometry, an atlas, and an imposed S¹ topology **all fail to move the learned manifold toward behavioral geometry** on this task. The earlier single-seed gains/rankings were noise. This is a clean negative on the isometry axis and squarely confirms the standing diagnosis: the current objective (behavior prediction + Euclidean-`d_y` isometry loss) is too weak to force global behavioral geometry. It is **not yet** a verdict on the *method* — that needs the patch-grounded test + a stronger relational objective.
 
 ## Next steps (in priority order)
 
-1. **Multiple seeds (≥3–5)** for every arm → error bars on isometry. Without this we cannot rank decoder vs behavior-pullback or call S¹ a regression.
-2. **Enable `patch_eval`** → patch VAE-decoded steered paths into the model and score coherence / distance-from-behavior-manifold, the *same* axes the spline wins on. This is the fair behavioral comparison and the real test of the central claim.
-3. **2D `graph_walk_grid_5x5`** → where atlas / multi-chart and richer topology are expected to matter (weekdays is too simple to need them).
-4. Consider a stronger behavior head / more data, and an isometry definition that doesn't structurally favor the centroid spline (e.g., score both manifolds on learned, non-centroid coordinates).
+1. ~~Multiple seeds~~ **DONE** — collapsed all single-seed differences to ≈ 0 ± 0.16.
+2. **`patch_eval`** → patch VAE-decoded steered paths into the model, score coherence / distance-from-behavior-manifold on the spline's axes. Tells us whether VAE steering is behaviorally coherent *despite* ≈ 0 isometry (i.e. whether the proxy under-rates it). Implemented; needs the GPU run.
+3. **Latent-coordinate plots** (`latent_coords.png`, now produced per arm) → diagnose the failure mode: scrambled loop, separated clusters, or fold. Determines whether the fix is the objective or the parameterization.
+4. **Stronger relational objective** (the standing guidance): replace Euclidean `d_y` with the task's **cyclic** distance; add a supervised-contrastive / ordinal loss; add a **centroid-supervised upper-bound** arm to separate objective failure from data scarcity (49 inputs).
+5. **2D `graph_walk_grid_5x5`** → where atlas / richer topology should matter.

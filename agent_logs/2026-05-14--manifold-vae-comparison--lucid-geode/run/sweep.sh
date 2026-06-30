@@ -144,4 +144,5 @@ find "${EXP_ROOT}" -name summary.csv -exec cat {} \;
 echo
 echo "===== metric_deltas.json ====="
 find "${EXP_ROOT}" -name metric_deltas.json -exec cat {} \;
-[ "${fail}" = "0" ] || echo "(one or more arms failed — see logs above)"
+echo
+echo "(check run/*.log for any arms that failed; grep -L 'comparison_ready' won't apply — inspect logs)"
