@@ -1,7 +1,25 @@
 # Manifold-VAE comparison — Debug/baseline milestone report
 
 **Session:** `2026-05-14--manifold-vae-comparison--lucid-geode`
-**Status:** Debug pass + **priority sweep complete, 6 seeds** (spline ceiling, recon-only floor, 5 behavior-aligned arms covering ablations 2/3/4a/4b/6). Weekdays only. Headline: all behavior-aligned VAE arms isometry ≈ 0 ± 0.16 vs spline 0.99. Patch-grounded behavior metrics for the VAE NOT yet computed (`patch_eval=false`).
+**Status:** Priority sweep + **objective fix complete** (seeded). Headline arc: the *original* behavior-aligned arms (Euclidean `d_y`) sit at isometry ≈ 0 ± 0.16 vs spline 0.99; the **cyclic relational + contrastive arm reaches isometry 0.936 ± 0.024 — matching the spline at no recon cost.** Patch-grounded behavioral comparison for the VAE NOT yet computed (`patch_eval=false`) — the key remaining test.
+
+## BREAKTHROUGH: cyclic relational + contrastive objective (weekdays, 5 seeds)
+
+Replacing the isometry loss's Euclidean `d_y` (distance between output-prob vectors) with the task's **cyclic class distance** `min(|Δ|,7−|Δ|)` + a supervised-contrastive order term (adjacent-near / distant-far) takes the learned VAE manifold from ≈ 0 to spline-level isometry:
+
+| arm | isometry r (mean ± std) | recon | note |
+|---|---|---|---|
+| spline (ceiling) | 0.990 | — | centroid-constructed |
+| **cyclic (per-example, cyclic+contrastive)** | **0.936 ± 0.024** | 80.5 | **learned; matches spline, recon unchanged** |
+| centroid-upper (cyclic, 7 centroids) | 0.447 ± 0.232 | ~0.6 | per-example *beats* this bound |
+| strong (Euclidean, KL 0.01, ×5 weights) | 0.089 ± 0.088 | 87.4 | rebalancing alone ≈ no help |
+| earlier Euclidean arms (flat/metric/atlas/s1) | ≈ 0 ± 0.16 | 60–80 | floor |
+
+Conclusions:
+- **The objective was the bottleneck, confirmed.** A behaviorally-grounded relational target (cyclic `d_y`) + contrastive ordering recovers the weekday ring; the learned VAE (r=0.936) is statistically near the centroid-constructed spline (0.990), and does it **without hurting reconstruction**.
+- **It was the *distance*, not KL collapse.** The `strong` arm (drop KL, ×5 behavior/isometry, still Euclidean) barely moved (0.089). Only swapping in the cyclic distance worked.
+- **Per-example > centroid-supervised.** 0.936 vs 0.447 — more data under the relational loss beats fitting 7 centroids; the architecture is clearly capable.
+- **Still open:** does spline-level *geometry* (isometry) translate to spline-level *behavioral steering*? That needs `patch_eval` on the cyclic arm — the next and decisive test.
 **Run:** Llama-3.1-8B on `tars` (GPU 3); artifacts under `/data/jiang/vennemdp/causalab/<session>/artifacts/natural_domains_arithmetic_weekdays/llama31_8b/weekdays/`.
 
 > Note: written from the run logs + result artifacts (metrics/CSV/JSON). Figures live on `/data` on tars and are referenced by path, not embedded. For a figure-embedded report, run `/interpret-experiment` on tars where the artifacts resolve.
