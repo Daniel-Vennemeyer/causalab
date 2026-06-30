@@ -642,14 +642,14 @@ def main(cfg: DictConfig) -> dict[str, Any]:
 
     behavior_targets: torch.Tensor | None = None
     behavior_targets_available = False
+    # Pass EVERY weight in the config block (not a hardcoded subset) so new terms
+    # — w_centroid_iso, w_compactness, w_manifold, … — actually reach training.
+    # (A previous hardcoded list silently dropped them, defaulting them to 0.)
     loss_weights = {
-        "w_recon": float(analysis.loss_weights.w_recon),
-        "w_kl": float(analysis.loss_weights.w_kl),
-        "w_behavior": float(analysis.loss_weights.w_behavior),
-        "w_isometry": float(analysis.loss_weights.w_isometry),
-        "w_geodesic": float(analysis.loss_weights.w_geodesic),
-        "w_patch": float(analysis.loss_weights.w_patch),
-        "w_contrastive": float(analysis.loss_weights.get("w_contrastive", 0.0)),
+        str(k): float(v)
+        for k, v in OmegaConf.to_container(
+            analysis.loss_weights, resolve=True
+        ).items()
     }
 
     # --- Relational-geometry knobs (defaults preserve euclidean behavior) ----
