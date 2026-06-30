@@ -1018,8 +1018,10 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             sel = torch.randperm(ref.shape[0], generator=g)[:2000]
             ref = ref[sel]
         all_pts = torch.cat(paths_decoded, dim=0)
+        # Compute on CPU so this eval metric is device-agnostic: with device=cuda
+        # the decoded paths are on GPU while the cached features are on CPU.
         with torch.no_grad():
-            dists_to_ref = torch.cdist(all_pts, ref)
+            dists_to_ref = torch.cdist(all_pts.cpu(), ref.cpu())
             nearest = dists_to_ref.min(dim=1).values
         metrics["geodesic_naturalness"] = float(nearest.mean())
     else:
