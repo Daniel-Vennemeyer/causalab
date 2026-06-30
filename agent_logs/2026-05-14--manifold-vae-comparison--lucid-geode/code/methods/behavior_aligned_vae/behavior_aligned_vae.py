@@ -210,7 +210,11 @@ def train_behavior_aligned_vae(
                 patched_behavior=None,
                 extra_loss=extra_loss,
             )
-            total.backward()
+            # Use torch.autograd.backward (not total.backward()) so this plain
+            # training step is not intercepted by nnsight's monkeypatch of
+            # Tensor.backward — nnsight is imported transitively by the analysis
+            # layer (pyvene) and otherwise raises WithBlockNotFoundError here.
+            torch.autograd.backward(total)
             opt.step()
 
             for key, val in metrics.items():

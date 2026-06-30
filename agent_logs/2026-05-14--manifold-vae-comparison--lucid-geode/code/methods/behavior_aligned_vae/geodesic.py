@@ -99,7 +99,9 @@ class GeodesicSolver:
             mids = path[:-1] + 0.5 * steps  # (n_points-1, k)
             g = metric_fn(mids)  # (n_points-1, k, k)
             energy = torch.einsum("ni,nij,nj->n", steps, g, steps).sum()
-            energy.backward()
+            # torch.autograd.backward (not energy.backward()) to bypass nnsight's
+            # Tensor.backward monkeypatch — see note in behavior_aligned_vae.py.
+            torch.autograd.backward(energy)
             opt.step()
 
         with torch.no_grad():
