@@ -18,8 +18,12 @@ DATA_ROOT="${DATA_ROOT:-/data/jiang/vennemdp/causalab}"
 SESSION="${SESSION:-2026-05-14--manifold-vae-comparison--lucid-geode}"
 MODEL="${MODEL:-llama31_8b}"
 SEEDS="${SEEDS:-0 1 2}"
-DEVICE="${DEVICE:-cpu}"
+DEVICE="${DEVICE:-cpu}"          # VAE/geodesic compute (tiny); the 8B model is device=auto -> GPU
 CUDA="${CUDA_VISIBLE_DEVICES:-3}"
+# GPU throughput knob: 8B forward batch for path_steering (baseline) AND the VAE
+# patch eval. Bigger = fewer batches = better GPU util. 256 is a safe default on
+# an 8B over short prompts; raise to 384/512 if the GPU has headroom, lower if OOM.
+BATCH="${BATCH:-256}"
 
 REPO_ROOT="$(pwd)"
 SESSION_DIR="${REPO_ROOT}/agent_logs/${SESSION}"
@@ -39,25 +43,45 @@ SPEC[age]="natural_domains_arithmetic_age|age_discovery_baseline|0|age_vae_trans
 
 DOMAINS="${DOMAINS:-months alphabet age}"
 
+# count for the [i/N] progress banner
+n_total=0; for _d in ${DOMAINS}; do n_total=$((n_total+1)); done
+echo "Domains: ${DOMAINS}   GPU=${CUDA}   BATCH=${BATCH}   SEEDS=${SEEDS}"
+echo
+
+i_dom=0
 for dom in ${DOMAINS}; do
+  i_dom=$((i_dom+1))
   IFS='|' read -r TDIR SPLINE PATCHFLAG ARMS <<< "${SPEC[$dom]}"
   EXP_ROOT="${DATA_ROOT}/${SESSION}/artifacts/${TDIR}/${MODEL}"
   mkdir -p "${EXP_ROOT}"
   echo "============================================================"
-  echo "DOMAIN=${dom}  EXP_ROOT=${EXP_ROOT}  patch=${PATCHFLAG}"
+  echo "[domain ${i_dom}/${n_total}] ${dom}   EXP_ROOT=${EXP_ROOT}   patch=${PATCHFLAG}"
   echo "============================================================"
 
-  # 1) Baseline / spline pipeline (loads the 8B model; produces subspace cache).
-  echo ">>> baseline runner: ${SPLINE}"
-  ./scripts/run_exp.sh --experiment-root "${EXP_ROOT}" "${SPLINE}" model="${MODEL}" \
-      > "${LOG_DIR}/gen_${dom}_${SPLINE}.log" 2>&1 \
-      && echo "    done -> ${LOG_DIR}/gen_${dom}_${SPLINE}.log" \
-      || { echo "    FAILED -> ${LOG_DIR}/gen_${dom}_${SPLINE}.log"; tail -8 "${LOG_DIR}/gen_${dom}_${SPLINE}.log" | sed 's/^/      /'; continue; }
+  # path_steering exists only in the full spline runners (months/alphabet), not in
+  # age_discovery_baseline — pass the GPU batch override only when applicable.
+  STEER_OVERRIDE=""
+  case "${SPLINE}" in *current_spline) STEER_OVERRIDE="path_steering.batch_size=${BATCH}";; esac
+
+  # 1) Baseline / spline pipeline (loads the 8B model on GPU; produces the cache).
+  #    Streamed live via `tee` so path_steering's tqdm bars are visible; GPU pinned.
+  echo ">>> [${i_dom}/${n_total}] baseline runner: ${SPLINE}  (GPU=${CUDA})"
+  if CUDA_VISIBLE_DEVICES="${CUDA}" ./scripts/run_exp.sh --experiment-root "${EXP_ROOT}" \
+        "${SPLINE}" model="${MODEL}" ${STEER_OVERRIDE:+$STEER_OVERRIDE} 2>&1 \
+        | tee "${LOG_DIR}/gen_${dom}_${SPLINE}.log"; then
+    echo "    done -> ${LOG_DIR}/gen_${dom}_${SPLINE}.log"
+  else
+    echo "    FAILED -> ${LOG_DIR}/gen_${dom}_${SPLINE}.log (see log)"; continue
+  fi
 
   # 2) VAE arms via the shared sweep (handles thread caps, seeds, compare).
-  echo ">>> arms: ${ARMS}  (PATCH=${PATCHFLAG})"
+  #    PATCH=1 -> sweep forces JOBS=1 and streams live. For age (PATCH=0) force
+  #    JOBS=1 too so its training/isometry tqdm streams instead of going quiet.
+  JOBS_ENV=""; [ "${PATCHFLAG}" = "0" ] && JOBS_ENV="1"
+  echo ">>> [${i_dom}/${n_total}] arms: ${ARMS}  (PATCH=${PATCHFLAG}, BATCH=${BATCH})"
   TASK_DIRNAME="${TDIR}" PATCH="${PATCHFLAG}" CUDA_VISIBLE_DEVICES="${CUDA}" \
-    DEVICE="${DEVICE}" ARMS="${ARMS}" SEEDS="${SEEDS}" \
+    DEVICE="${DEVICE}" ARMS="${ARMS}" SEEDS="${SEEDS}" BATCH="${BATCH}" \
+    ${JOBS_ENV:+JOBS=$JOBS_ENV} \
     bash "${SESSION_DIR}/run/sweep.sh"
 done
 

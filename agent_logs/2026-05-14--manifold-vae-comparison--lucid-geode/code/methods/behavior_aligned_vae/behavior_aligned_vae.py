@@ -203,7 +203,19 @@ def train_behavior_aligned_vae(
 
     history: List[Dict[str, float]] = []
 
-    for epoch in range(epochs):
+    # Progress bar over epochs (leave=False so it clears after training). tqdm
+    # writes to stderr; with the sweep's live `tee` it streams, and in quiet log
+    # mode it just adds occasional lines. dynamic_ncols handles narrow terminals.
+    from tqdm import tqdm as _tqdm
+
+    _epoch_iter = _tqdm(
+        range(epochs),
+        desc="VAE train",
+        leave=False,
+        dynamic_ncols=True,
+        mininterval=0.5,
+    )
+    for epoch in _epoch_iter:
         model.train()
         if behavior_head is not None:
             behavior_head.train()
@@ -286,6 +298,10 @@ def train_behavior_aligned_vae(
             epoch_metrics[key] /= max(1, n_batches)
         epoch_metrics["epoch"] = float(epoch)
         epoch_metrics["kl_scale"] = kl_scale
+        _epoch_iter.set_postfix(
+            loss=f"{epoch_metrics.get('total', 0.0):.2f}",
+            recon=f"{epoch_metrics.get('recon', 0.0):.2f}",
+        )
 
         # Optional validation pass.
         if val_features_norm is not None:

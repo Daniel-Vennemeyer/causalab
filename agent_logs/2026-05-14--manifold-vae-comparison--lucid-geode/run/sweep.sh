@@ -50,6 +50,14 @@ if [ "${PATCH:-0}" = "1" ]; then
   echo "PATCH=1 -> patch_eval=true (loads the 8B model)"
 fi
 
+# GPU throughput: override the patch-eval 8B forward batch size. Bigger = fewer
+# batches = better GPU util. Only affects the patch path (the 8B forwards).
+BATCH_OVERRIDE=""
+if [ -n "${BATCH:-}" ]; then
+  BATCH_OVERRIDE="behavior_manifold_vae.patch_batch_size=${BATCH}"
+  echo "BATCH=${BATCH} -> patch_batch_size=${BATCH}"
+fi
+
 # Seeds to run per arm (space-separated). Default 42 (matches base.yaml).
 # e.g. SEEDS="0 1 2 3 4" for error bars. Each (arm, seed) writes a distinct
 # _seed{seed} dir, so seeds accumulate without clobbering.
@@ -106,13 +114,15 @@ run_one() {  # run_one <arm> <seed>
     # serial → stream live so the in-run tqdm progress bars are visible, tee to log
     ./scripts/run_exp.sh --experiment-root "${EXP_ROOT}" "${arm}" \
       model="${MODEL}" seed="${seed}" behavior_manifold_vae.device="${DEVICE}" \
-      ${PATCH_OVERRIDE:+$PATCH_OVERRIDE} ${GEO_OVERRIDE:+$GEO_OVERRIDE} 2>&1 | tee "${log}"
+      ${PATCH_OVERRIDE:+$PATCH_OVERRIDE} ${BATCH_OVERRIDE:+$BATCH_OVERRIDE} \
+      ${GEO_OVERRIDE:+$GEO_OVERRIDE} 2>&1 | tee "${log}"
     rc=${PIPESTATUS[0]}
   else
     # parallel → quiet to log (interleaved live bars would be unreadable)
     ./scripts/run_exp.sh --experiment-root "${EXP_ROOT}" "${arm}" \
       model="${MODEL}" seed="${seed}" behavior_manifold_vae.device="${DEVICE}" \
-      ${PATCH_OVERRIDE:+$PATCH_OVERRIDE} ${GEO_OVERRIDE:+$GEO_OVERRIDE} > "${log}" 2>&1 || rc=$?
+      ${PATCH_OVERRIDE:+$PATCH_OVERRIDE} ${BATCH_OVERRIDE:+$BATCH_OVERRIDE} \
+      ${GEO_OVERRIDE:+$GEO_OVERRIDE} > "${log}" 2>&1 || rc=$?
   fi
   if [ "${rc}" = "0" ]; then
     echo "    done -> ${log}"
@@ -122,7 +132,7 @@ run_one() {  # run_one <arm> <seed>
   fi
 }
 export -f run_one
-export EXP_ROOT MODEL DEVICE LOG_DIR PATCH_OVERRIDE GEO_OVERRIDE JOBS
+export EXP_ROOT MODEL DEVICE LOG_DIR PATCH_OVERRIDE BATCH_OVERRIDE GEO_OVERRIDE JOBS
 
 # Run all (arm, seed) combos with up to JOBS concurrent workers (xargs -P is
 # portable across bash versions; runs are independent so this just hides the
