@@ -17,16 +17,32 @@ Replacing the isometry loss's Euclidean `d_y` (distance between output-prob vect
 | activation (label-free: latent↔activation distances) | −0.123 ± 0.060 | 87.6 | structure NOT recoverable from raw activation geometry |
 | earlier Euclidean arms (flat/metric/atlas/s1) | ≈ 0 ± 0.16 | 60–80 | floor |
 
-### Patch-grounded steering (the causal arbiter) — preliminary, 1 seed
+### Patch-grounded steering (the causal arbiter) — 3 seeds, DEFINITIVE
 
-`patch_eval` patches VAE-decoded steered paths into the 8B model and scores the same axes as the spline. First result (`transition_centroid`, seed 0):
+`patch_eval` patches VAE-decoded steered paths into the 8B model and scores the same axes as the spline.
 
-| | spline geometric | spline linear | transition_centroid (VAE) |
+| arm | isometry | coherence ↑ | dist-from-behavior-manifold ↓ |
 |---|---|---|---|
-| coherence ↑ | 0.779 | 0.717 | **0.712** |
-| dist-from-behavior-manifold ↓ | 0.325 | 1.397 | **1.434** |
+| **spline geometric** | 0.990 | **0.779** | **0.325** |
+| spline linear | 0.887 | 0.717 | 1.397 |
+| cyclic_centroid (injected, iso 0.91) | 0.909 | 0.705 ± 0.013 | 1.280 ± 0.067 |
+| transition_centroid (discovered, latent-linear path) | 0.820 | 0.717 ± 0.005 | 1.317 ± 0.136 |
+| transition_dpb (discovered, on-manifold geodesic) | 0.823 | 0.715 ± 0.004 | 1.426 ± 0.115 |
 
-**The discovered VAE manifold steers ≈ linear interpolation, not the spline geodesic.** It recovered the behavioral *order* (clean latent ring) but its steered *paths* aren't manifold-faithful: a straight line in the 2-D latent decodes to a roughly-linear activation path, so intermediate points fall OFF the behavior manifold (dist 1.43 ≈ linear's 1.40, vs the spline geodesic's 0.33). Consistent with the isometry proxy (≈0.82 ≈ linear 0.887). **Bottleneck = the path/decoder, not the latent.** Targeted fix under test: `transition_dpb` arm uses decoder-pullback geodesics (paths that follow the manifold) for both isometry and the patched path.
+**Every VAE arm steers like linear interpolation (coherence ≈ 0.71, dist ≈ 1.3–1.4); none approaches the spline geodesic (0.78 / 0.33).** This is robust to isometry (0.82→0.91), path metric (latent-linear vs decoder-pullback geodesic — the on-manifold geodesic did NOT help, dist 1.43), and injected-vs-discovered structure.
+
+Decisive insight: **isometry does not predict steering.** cyclic_centroid (iso 0.91) still steers at dist 1.28 ≈ linear. The spline wins because its geodesic interpolates **real class centroids in activation space** → realistic intermediate activations → on-manifold behavior. The VAE's MLP decoder is trained to reconstruct *data points* only; its *interpolated* path points are **off-distribution**, so patched intermediates drift off the behavior manifold like a straight line. "Shortest path in decoder-output space" (decoder-pullback) ≠ "stays on the realistic-activation manifold," which is why that fix failed. Closing this needs a decoder whose interpolants stay on the data manifold (e.g. the bijective `flow` method, or projecting decoded path points onto real activations) — a deeper architectural change, documented as future work.
+
+## Final summary: fit → discover → steer
+
+| question | answer |
+|---|---|
+| Can a VAE **fit** a known behavior manifold? | **Yes** — isometry 0.94 (cyclic, injected), no recon cost; ring emerges in an unstructured latent. |
+| **Discover** it without injecting structure? | **Yes** — isometry 0.82 from behavioral transitions (step `number`, read class moves); ring recovered, no topology declared. |
+| Beat **linear** on the isometry proxy? | Marginally (injected centroid arm 0.91 > 0.887; discovered 0.82 < 0.887). |
+| **Steer the model** like the spline (the metric that matters)? | **No** — all arms ≈ linear (coh 0.71, dist 1.3–1.4); the spline geodesic (0.78/0.33) is unbeaten. Bottleneck: VAE decoder produces off-distribution interpolants. |
+
+**Bottom line:** a VAE *discovers* the behavior manifold's structure from behavior alone — a real positive — but is *not* a better steering instrument than the hand-built spline; its learned decoder doesn't keep interpolated paths on the activation manifold. The spline remains superior for steering by construction.
 
 ### Fit vs. discover — RESOLVED: discovery works via behavioral transitions
 
