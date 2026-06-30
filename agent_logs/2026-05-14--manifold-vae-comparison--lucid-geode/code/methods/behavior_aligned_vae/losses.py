@@ -93,6 +93,7 @@ class LossBundle:
         w_contrastive: float,
         w_centroid_iso: float,
         w_compactness: float,
+        w_manifold: float,
         behavior_distance: str,
     ):
         if behavior_distance not in _VALID_BEHAVIOR_DISTANCES:
@@ -109,6 +110,7 @@ class LossBundle:
         self.w_contrastive = w_contrastive
         self.w_centroid_iso = w_centroid_iso
         self.w_compactness = w_compactness
+        self.w_manifold = w_manifold
         self.behavior_distance = behavior_distance
 
     @staticmethod
@@ -303,6 +305,21 @@ class LossBundle:
         steps = decoded_path[1:] - decoded_path[:-1]
         return (steps**2).sum(dim=-1).mean()
 
+    @staticmethod
+    def manifold_interp_loss(decoded_interp: Tensor, ref: Tensor) -> Tensor:
+        """Off-manifold energy of decoded latent INTERPOLANTS: mean distance from
+        each decoded interpolated point to the nearest real activation in ``ref``.
+
+        Reconstruction only constrains the decoder at *data points*; its
+        *interpolated* outputs drift off the activation manifold, which is why
+        VAE steering ≈ linear (off-manifold patched intermediates). Penalizing
+        this pulls decoded interpolants back onto the data manifold → in-
+        distribution steering paths. ``decoded_interp`` (M, ambient), ``ref``
+        (N, ambient) — both in the same (standardized) feature space.
+        """
+        d = torch.cdist(decoded_interp, ref)
+        return d.min(dim=1).values.mean()
+
     def compute_losses(
         self,
         *,
@@ -323,6 +340,8 @@ class LossBundle:
         geometry_matrix: Optional[Tensor] = None,
         class_idx: Optional[Tensor] = None,
         contrastive_margin: float = 1.0,
+        decoded_interp: Optional[Tensor] = None,
+        interp_ref: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Dict[str, float]]:
         """Return ``(total_loss, metrics)``.
 
@@ -465,6 +484,15 @@ class LossBundle:
 
         if extra_loss is not None:
             total = total + extra_loss
+
+        if (
+            self.w_manifold != 0.0
+            and decoded_interp is not None
+            and interp_ref is not None
+        ):
+            mani = self.manifold_interp_loss(decoded_interp, interp_ref)
+            total = total + self.w_manifold * mani
+            metrics["manifold_interp"] = mani.item()
 
         metrics["total"] = total.item()
         return total, metrics

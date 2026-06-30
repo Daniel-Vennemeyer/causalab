@@ -320,6 +320,7 @@ def test_loss_bundle_terms():
         w_contrastive=0.0,
         w_centroid_iso=0.0,
         w_compactness=0.0,
+        w_manifold=0.0,
         behavior_distance="js",
     )
     b, c, k = 12, N_BEHAVIOR, LATENT
@@ -423,6 +424,7 @@ def test_loss_bundle_skips_zero_weight_terms():
         w_contrastive=0.0,
         w_centroid_iso=0.0,
         w_compactness=0.0,
+        w_manifold=0.0,
         behavior_distance="kl",
     )
     b = 5
@@ -578,7 +580,7 @@ def test_isometry_activation_mode_label_free():
     lb = LossBundle(
         w_recon=1.0, w_kl=0.0, w_behavior=0.0, w_isometry=1.0,
         w_geodesic=0.0, w_patch=0.0, w_contrastive=0.0,
-        w_centroid_iso=0.0, w_compactness=0.0,
+        w_centroid_iso=0.0, w_compactness=0.0, w_manifold=0.0,
         behavior_distance="hellinger",
     )
     torch.manual_seed(0)
@@ -893,3 +895,24 @@ def test_train_with_centroid_iso_and_compactness():
     )
     fm = res["final_metrics"]
     assert math.isfinite(fm["centroid_iso"]) and math.isfinite(fm["compactness"])
+
+
+def test_manifold_interp_loss_and_train():
+    """manifold_interp_loss is ~0 when interpolants coincide with refs and grows
+    when they're far; train runs with w_manifold and reports the term."""
+    torch.manual_seed(0)
+    ref = torch.randn(20, 8)
+    on = LossBundle.manifold_interp_loss(ref.clone(), ref)        # points ON the data
+    off = LossBundle.manifold_interp_loss(ref + 5.0, ref)          # points far OFF
+    assert float(on) < 1e-6 and float(off) > float(on)
+    res = train_behavior_aligned_vae(
+        torch.randn(40, 12), behavior_targets=None, method="flat_vae", latent_dim=2,
+        hidden_dims=[32, 32], topology="unstructured", n_charts=1,
+        behavior_hidden_dims=[16], n_behavior=6,
+        loss_weights=dict(w_recon=1.0, w_kl=0.01, w_behavior=0.0, w_isometry=0.0,
+                          w_geodesic=0.0, w_patch=0.0, w_contrastive=0.0,
+                          w_centroid_iso=0.0, w_compactness=0.0, w_manifold=1.0),
+        behavior_distance="hellinger", lr=1e-3, epochs=3, batch_size=32,
+        kl_warmup_epochs=1, device="cpu", seed=0,
+    )
+    assert math.isfinite(res["final_metrics"]["manifold_interp"])

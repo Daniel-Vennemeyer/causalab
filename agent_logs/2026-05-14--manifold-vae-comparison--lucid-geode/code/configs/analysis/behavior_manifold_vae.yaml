@@ -17,6 +17,7 @@ loss_weights:
   w_contrastive: 0.0
   w_centroid_iso: 0.0   # match per-class latent-CENTROID distances to d_y (optimizes the eval metric directly)
   w_compactness: 0.0    # within-class scatter penalty (crisp centroids)
+  w_manifold: 0.0       # off-manifold energy of decoded latent interpolants (keeps steering paths in-distribution)
 behavior_distance: hellinger   # kl | hellinger | js
 behavior_geometry: euclidean    # euclidean | cyclic | ordinal | activation | precomputed  (d_y for isometry; "activation" = label-free; "precomputed" = transition-derived (W,W) matrix built in the analysis from the model's behavioral transitions)
 behavior_period: null           # null -> use n_classes (W); 7 for weekdays cyclic

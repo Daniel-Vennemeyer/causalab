@@ -151,6 +151,7 @@ def train_behavior_aligned_vae(
     w_contrastive = loss_weights.get("w_contrastive", 0.0)
     w_centroid_iso = loss_weights.get("w_centroid_iso", 0.0)
     w_compactness = loss_weights.get("w_compactness", 0.0)
+    w_manifold = loss_weights.get("w_manifold", 0.0)
     needs_behavior = (
         w_behavior != 0.0 or w_patch != 0.0 or behavior_targets is not None
     )
@@ -172,6 +173,7 @@ def train_behavior_aligned_vae(
         w_contrastive=w_contrastive,
         w_centroid_iso=w_centroid_iso,
         w_compactness=w_compactness,
+        w_manifold=w_manifold,
         behavior_distance=behavior_distance,
     )
 
@@ -231,6 +233,19 @@ def train_behavior_aligned_vae(
             ):
                 behavior_pred = behavior_head.predict_dist(u)
 
+            # Manifold-interpolation term: decode random latent interpolants and
+            # (in the loss) pull them toward real activations, so interpolated
+            # steering paths stay in-distribution. Grad flows to decoder + encoder.
+            decoded_interp = None
+            if w_manifold != 0.0 and u.shape[0] >= 2:
+                B = u.shape[0]
+                n_interp = min(256, 4 * B)
+                ia = torch.randint(0, B, (n_interp,), device=u.device)
+                ib = torch.randint(0, B, (n_interp,), device=u.device)
+                t = torch.rand(n_interp, 1, device=u.device)
+                u_mid = u[ia] + t * (u[ib] - u[ia])
+                decoded_interp = model.decode(u_mid)
+
             total, metrics = loss_bundle.compute_losses(
                 h=h_batch,
                 h_hat=h_hat,
@@ -249,6 +264,8 @@ def train_behavior_aligned_vae(
                 geometry_matrix=geometry_matrix,
                 class_idx=geom_batch,
                 contrastive_margin=contrastive_margin,
+                decoded_interp=decoded_interp,
+                interp_ref=h_batch,
             )
             # Use torch.autograd.backward (not total.backward()) so this plain
             # training step is not intercepted by nnsight's monkeypatch of
