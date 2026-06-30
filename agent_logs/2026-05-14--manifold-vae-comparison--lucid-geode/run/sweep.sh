@@ -51,23 +51,49 @@ fi
 # _seed{seed} dir, so seeds accumulate without clobbering.
 read -r -a SEEDS_ARR <<< "${SEEDS:-42}"
 echo "SEEDS = ${SEEDS_ARR[*]}"
+
+# Device for VAE training + geodesic/metric compute. NOTE: the dominant cost of
+# the non-patch sweep is per-run process startup (importing the stack), not the
+# tiny VAE (≈1s train, ≈10s for the 21-geodesic metric arms). GPU barely helps
+# those launch-bound ops — JOBS (parallelism) is the real speedup. cuda is the
+# default to honor the GPU box; set DEVICE=cpu if CUDA contention is an issue.
+DEVICE="${DEVICE:-cuda}"
+
+# JOBS = how many (arm,seed) runs to run concurrently. The runs are independent
+# (distinct output dirs, shared read-only cache), so parallelism hides the
+# import/startup latency that dominates wall-clock. PATCH=1 loads the 8B model
+# per run, so it is forced serial (multiple 8B models would OOM the GPU).
+JOBS="${JOBS:-4}"
+if [ "${PATCH:-0}" = "1" ]; then JOBS=1; fi
+echo "DEVICE = ${DEVICE}   JOBS = ${JOBS}"
 echo
 
-fail=0
+# One run. Always returns 0 (failures are logged, not fatal) so a single bad arm
+# doesn't abort the whole sweep. Exported for the xargs workers below.
+run_one() {  # run_one <arm> <seed>
+  local arm="$1" seed="$2"
+  local log="${LOG_DIR}/run_${arm}_seed${seed}.log"
+  echo ">>> ${arm} seed=${seed}"
+  if ./scripts/run_exp.sh --experiment-root "${EXP_ROOT}" "${arm}" \
+        model="${MODEL}" seed="${seed}" behavior_manifold_vae.device="${DEVICE}" \
+        ${PATCH_OVERRIDE:+$PATCH_OVERRIDE} > "${log}" 2>&1; then
+    echo "    done -> ${log}"
+  else
+    echo "    FAILED -> ${log} (see log)"
+    tail -8 "${log}" | sed 's/^/      /'
+  fi
+}
+export -f run_one
+export EXP_ROOT MODEL DEVICE LOG_DIR PATCH_OVERRIDE
+
+# Run all (arm, seed) combos with up to JOBS concurrent workers (xargs -P is
+# portable across bash versions; runs are independent so this just hides the
+# per-run import/startup latency that dominates wall-clock).
 for arm in "${ARMS[@]}"; do
   for seed in "${SEEDS_ARR[@]}"; do
-    echo ">>> ${arm} seed=${seed} ${PATCH_OVERRIDE}"
-    log="${LOG_DIR}/run_${arm}_seed${seed}.log"
-    if ./scripts/run_exp.sh --experiment-root "${EXP_ROOT}" "${arm}" model="${MODEL}" seed="${seed}" ${PATCH_OVERRIDE:+$PATCH_OVERRIDE} \
-          > "${log}" 2>&1; then
-      echo "    done -> ${log}"
-    else
-      echo "    FAILED -> ${log} (continuing)"
-      tail -15 "${log}" | sed 's/^/      /'
-      fail=1
-    fi
+    printf '%s %s\n' "${arm}" "${seed}"
   done
-done
+done | xargs -P "${JOBS}" -L1 bash -c 'run_one "$@"' _
 
 echo
 echo ">>> compare_architectures"
