@@ -311,6 +311,8 @@ def _run_patch_eval(
     metrics: dict[str, Any],
     notes: dict[str, str],
     comparison_extra: dict[str, Any],
+    features: torch.Tensor,
+    project_to_data: bool = False,
 ) -> None:
     """Decode VAE-steered class-centroid-pair paths into the frozen LM and score
     them on the spline's behavioral axes (coherence + distance_from_behavior_manifold).
@@ -395,6 +397,24 @@ def _run_patch_eval(
         composed = subspace_feat >> manifold_feat
         unit.set_featurizer(composed)
 
+        # --- Optional: project-to-data (confirmation test) -------------------
+        # Instead of patching the VAE-decoded path point (which may be OFF the
+        # realistic-activation distribution), snap each decoded point to the
+        # NEAREST real training activation and patch THAT via the subspace
+        # featurizer only. If distance-from-behavior-manifold drops toward the
+        # spline's, it confirms that off-distribution decoder interpolants — not
+        # the latent ordering — are why VAE steering ≈ linear.
+        sub_target = None
+        feats_ref = features.detach().float().cpu()
+        if project_to_data:
+            targets2, _ = build_targets_for_grid(
+                pipeline, task, [layer], position_names=[token_position]
+            )
+            sub_target = next(iter(targets2.values()))
+            load_subspace_onto_target(
+                sub_target, subspace_out_dir, ss_method, k_features
+            )  # subspace featurizer only (no manifold compose)
+
         # --- var_indices + eval_samples (mirror path_steering) ---------------
         values = task.intervention_values
         var_indices = tokenize_variable_values(
@@ -444,11 +464,25 @@ def _run_patch_eval(
                     U[i], U[j], patch_num_steps, manifold
                 )
 
+            # Default: patch the VAE-decoded intrinsic path via the composed
+            # (subspace >> manifold) featurizer. project_to_data: decode to PCA,
+            # snap each point to the nearest real training activation, and patch
+            # that via the subspace featurizer only.
+            if project_to_data:
+                with torch.no_grad():
+                    decoded_pca = manifold.decode(grid_points).detach().cpu()
+                    nn = torch.cdist(decoded_pca, feats_ref).argmin(dim=1)
+                    patch_grid = feats_ref[nn]  # (steps, k_features) real activations
+                patch_target = sub_target
+            else:
+                patch_grid = grid_points
+                patch_target = interchange_target
+
             # (patch_num_steps, n_prompts, W)
             probs = collect_grid_distributions(
                 pipeline=pipeline,
-                grid_points=grid_points,
-                interchange_target=interchange_target,
+                grid_points=patch_grid,
+                interchange_target=patch_target,
                 filtered_samples=eval_samples,
                 var_indices=var_indices,
                 batch_size=patch_batch_size,
@@ -1058,6 +1092,8 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             metrics=metrics,
             notes=notes,
             comparison_extra=comparison_extra,
+            features=features,
+            project_to_data=bool(analysis.get("patch_project_to_data", False)),
         )
 
     if notes:

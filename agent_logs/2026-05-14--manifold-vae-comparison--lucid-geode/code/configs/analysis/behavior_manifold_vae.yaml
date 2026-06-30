@@ -41,6 +41,10 @@ patch_max_pairs: 21        # class-centroid pairs only (weekdays: all C(7,2)=21)
                            # Spline path_steering also adds 29 dense "extra" pairs
                            # (50 total); the VAE patch scores the centroid subset.
 patch_batch_size: 128      # forward batch size for collect_grid_distributions
+patch_project_to_data: false  # confirmation test: snap each decoded path point to the
+                              # nearest REAL training activation before patching (tests
+                              # whether off-distribution decoder interpolants are why
+                              # VAE steering ~ linear). Patches via the subspace featurizer.
 subspace: null
 layers: null
 token_positions: [last_token]
