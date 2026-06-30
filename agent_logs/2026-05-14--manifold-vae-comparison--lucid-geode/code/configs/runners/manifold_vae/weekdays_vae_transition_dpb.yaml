@@ -1,0 +1,46 @@
+# @package _global_
+# Close the STEERING gap: the discovered (transition) manifold steers like linear
+# interpolation (coherence 0.71 / dist 1.43 ≈ spline-linear) because a straight
+# latent line decodes to off-manifold activation paths. Here the geodesic follows
+# the manifold via the decoder-pullback metric (G_h = J^T J), so both isometry
+# (D_X) AND the patched steered path are true on-manifold geodesics — testing
+# whether on-manifold paths recover the spline's geometric advantage (dist 0.33).
+# Same behavior-derived transition d_y; centroid-iso + compactness retained.
+defaults:
+  - /base
+  - /task: natural_domains_arithmetic_weekdays
+  - /model: llama31_8b
+  - /analysis/behavior_manifold_vae
+  - _self_
+
+task:
+  target_variable: result
+
+behavior_manifold_vae:
+  method: metric_vae
+  topology: unstructured
+  metric: decoder_pullback        # geodesics follow the manifold (not straight latent lines)
+  latent_dim: 2
+  n_charts: 1
+  layers: [28]
+  token_positions: [last_token]
+  behavior_geometry: precomputed
+  transition_variable: number
+  contrastive_margin: 1.0
+  loss_weights:
+    w_recon: 0.2
+    w_kl: 0.01
+    w_behavior: 0.0
+    w_isometry: 2.0
+    w_geodesic: 0.0
+    w_patch: 0.0
+    w_contrastive: 2.0
+    w_centroid_iso: 5.0
+    w_compactness: 1.0
+  geodesic:
+    n_points: 16
+    n_iters: 100
+    lr: 0.05
+  patch_eval: false
+  device: cpu
+  arm_label: transition_dpb

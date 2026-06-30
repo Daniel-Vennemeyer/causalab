@@ -17,6 +17,17 @@ Replacing the isometry loss's Euclidean `d_y` (distance between output-prob vect
 | activation (label-free: latent↔activation distances) | −0.123 ± 0.060 | 87.6 | structure NOT recoverable from raw activation geometry |
 | earlier Euclidean arms (flat/metric/atlas/s1) | ≈ 0 ± 0.16 | 60–80 | floor |
 
+### Patch-grounded steering (the causal arbiter) — preliminary, 1 seed
+
+`patch_eval` patches VAE-decoded steered paths into the 8B model and scores the same axes as the spline. First result (`transition_centroid`, seed 0):
+
+| | spline geometric | spline linear | transition_centroid (VAE) |
+|---|---|---|---|
+| coherence ↑ | 0.779 | 0.717 | **0.712** |
+| dist-from-behavior-manifold ↓ | 0.325 | 1.397 | **1.434** |
+
+**The discovered VAE manifold steers ≈ linear interpolation, not the spline geodesic.** It recovered the behavioral *order* (clean latent ring) but its steered *paths* aren't manifold-faithful: a straight line in the 2-D latent decodes to a roughly-linear activation path, so intermediate points fall OFF the behavior manifold (dist 1.43 ≈ linear's 1.40, vs the spline geodesic's 0.33). Consistent with the isometry proxy (≈0.82 ≈ linear 0.887). **Bottleneck = the path/decoder, not the latent.** Targeted fix under test: `transition_dpb` arm uses decoder-pullback geodesics (paths that follow the manifold) for both isometry and the patched path.
+
 ### Fit vs. discover — RESOLVED: discovery works via behavioral transitions
 
 The cyclic arm (0.936) *injects* the topology (period, ordering); so does the spline (via `periodic_dims` metadata). The label-free `activation` arm (−0.12) showed the ring is **not** recoverable from raw activation-distance geometry (low-variance circular feature swamped in 64-d; static one-hot outputs are equidistant). The adjacency lives in the input→output **mechanism** — so we derived `d_y` from the model's **behavioral transitions**: step the ordinal input `number` by +1 (entity fixed), read how the model's *predicted* result class moves, take graph distance on the transition graph. **No period / ordering / "cyclic" is declared** — only that `number` is a steppable ordinal input.
