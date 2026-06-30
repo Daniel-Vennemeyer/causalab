@@ -429,6 +429,10 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                 "no output_manifold belief manifold found; cannot build D_Y"
             )
         else:
+            # output_manifold nests its checkpoint under {subdir}/{target_variable}/
+            # when a target_variable is set (mirrors path_steering's loader).
+            if tv:
+                bm_sub = os.path.join(bm_sub, tv)
             belief_manifold, _ = load_output_manifold(root, bm_sub)
             bel_cps = belief_manifold.control_points
             present_t = torch.tensor(present_classes, dtype=torch.long)

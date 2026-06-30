@@ -72,6 +72,14 @@ echo "UV_PROJECT_ENVIRONMENT = ${UV_PROJECT_ENVIRONMENT}"
 echo "MODEL               = ${MODEL}   DEBUG=${DEBUG}"
 echo
 
+# Which steps to run (space-separated): 1=spline baseline, 2=VAE debug arm,
+# 3=compare. Default all. Skip already-done steps, e.g.  STEPS="2 3"  to reuse
+# the cached spline baseline on /data after re-pulling a code fix.
+STEPS="${STEPS:-1 2 3}"
+step_enabled() { case " ${STEPS} " in *" $1 "*) return 0;; *) return 1;; esac; }
+echo "STEPS               = ${STEPS}"
+echo
+
 run() {  # run <runner> [extra hydra overrides...]
   local runner="$1"; shift
   echo ">>> ${runner} ${*:-}"
@@ -81,25 +89,27 @@ run() {  # run <runner> [extra hydra overrides...]
 }
 
 # 1) Current-code reproduction (spline pipeline; produces the shared cache).
-if [ "${DEBUG}" = "1" ]; then
-  run weekdays_current_spline task.n_train=64 task.n_test=16
-else
-  run weekdays_current_spline
+if step_enabled 1; then
+  if [ "${DEBUG}" = "1" ]; then
+    run weekdays_current_spline task.n_train=64 task.n_test=16
+  else
+    run weekdays_current_spline
+  fi
+
+  # --- pre-flight gate: stop if the model can't do the task -------------------
+  ACC="${EXP_ROOT}/baseline/accuracy.json"
+  echo
+  echo "Baseline accuracy ($ACC):"
+  [ -f "${ACC}" ] && cat "${ACC}" || echo "  (missing — check ${LOG_DIR}/run_weekdays_current_spline.log)"
+  echo "If weekday accuracy is poor, STOP and fix task/model before trusting the comparison."
+  echo
 fi
 
-# --- pre-flight gate: stop if the model can't do the task ---------------------
-ACC="${EXP_ROOT}/baseline/accuracy.json"
-echo
-echo "Baseline accuracy ($ACC):"
-[ -f "${ACC}" ] && cat "${ACC}" || echo "  (missing — check ${LOG_DIR}/run_weekdays_current_spline.log)"
-echo "If weekday accuracy is poor, STOP and fix task/model before trusting the comparison."
-echo
-
 # 2) Debug VAE arm (reuses the shared cache).
-run weekdays_vae_debug
+if step_enabled 2; then run weekdays_vae_debug; fi
 
 # 3) Aggregate spline vs VAE.
-run compare_architectures
+if step_enabled 3; then run compare_architectures; fi
 
 echo
 echo "All steps done. Artifacts under: ${EXP_ROOT}"
