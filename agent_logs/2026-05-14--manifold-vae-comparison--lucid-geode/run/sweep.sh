@@ -46,17 +46,27 @@ if [ "${PATCH:-0}" = "1" ]; then
   echo "PATCH=1 -> patch_eval=true (loads the 8B model)"
 fi
 
+# Seeds to run per arm (space-separated). Default 42 (matches base.yaml).
+# e.g. SEEDS="0 1 2 3 4" for error bars. Each (arm, seed) writes a distinct
+# _seed{seed} dir, so seeds accumulate without clobbering.
+read -r -a SEEDS_ARR <<< "${SEEDS:-42}"
+echo "SEEDS = ${SEEDS_ARR[*]}"
+echo
+
 fail=0
 for arm in "${ARMS[@]}"; do
-  echo ">>> ${arm} ${PATCH_OVERRIDE}"
-  if ./scripts/run_exp.sh --experiment-root "${EXP_ROOT}" "${arm}" model="${MODEL}" ${PATCH_OVERRIDE:+$PATCH_OVERRIDE} \
-        > "${LOG_DIR}/run_${arm}.log" 2>&1; then
-    echo "    done -> ${LOG_DIR}/run_${arm}.log"
-  else
-    echo "    FAILED -> ${LOG_DIR}/run_${arm}.log (continuing)"
-    tail -15 "${LOG_DIR}/run_${arm}.log" | sed 's/^/      /'
-    fail=1
-  fi
+  for seed in "${SEEDS_ARR[@]}"; do
+    echo ">>> ${arm} seed=${seed} ${PATCH_OVERRIDE}"
+    log="${LOG_DIR}/run_${arm}_seed${seed}.log"
+    if ./scripts/run_exp.sh --experiment-root "${EXP_ROOT}" "${arm}" model="${MODEL}" seed="${seed}" ${PATCH_OVERRIDE:+$PATCH_OVERRIDE} \
+          > "${log}" 2>&1; then
+      echo "    done -> ${log}"
+    else
+      echo "    FAILED -> ${log} (continuing)"
+      tail -15 "${log}" | sed 's/^/      /'
+      fail=1
+    fi
+  done
 done
 
 echo
@@ -66,7 +76,10 @@ echo ">>> compare_architectures"
 echo "    done -> ${LOG_DIR}/run_compare_architectures.log"
 
 echo
-echo "===== summary.csv ====="
+echo "===== summary_by_arm.csv (mean±std across seeds) ====="
+find "${EXP_ROOT}" -name summary_by_arm.csv -exec cat {} \;
+echo
+echo "===== summary.csv (per arm/seed) ====="
 find "${EXP_ROOT}" -name summary.csv -exec cat {} \;
 echo
 echo "===== metric_deltas.json ====="

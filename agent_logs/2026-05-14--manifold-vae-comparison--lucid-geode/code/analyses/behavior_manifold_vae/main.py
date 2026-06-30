@@ -134,6 +134,78 @@ def _interp1d(x: torch.Tensor, xp: torch.Tensor, fp: torch.Tensor) -> torch.Tens
     return y0 + w * (y1 - y0)
 
 
+def _plot_latent_coords(
+    *,
+    u_all: torch.Tensor,
+    cls_idx: torch.Tensor,
+    U: torch.Tensor,
+    present_classes: list[int],
+    topology: str,
+    periodic_dims: list[int] | None,
+    out_dir: str,
+    figure_format: str = "png",
+) -> str | None:
+    """Diagnostic scatter of the learned latent coordinates colored by class.
+
+    The single most informative plot for "did the VAE learn the manifold?":
+    per-example intrinsic coords scattered, per-class centroids overlaid and
+    connected IN CLASS ORDER (loop closed for cyclic tasks). A clean ring ⇒ the
+    latent recovered the cyclic behavioral order; a scrambled/folded loop or
+    separated clusters ⇒ it learned separability/density but not the geometry.
+    Cyclic 1-D latents (s1) are drawn on the unit circle via (cosθ, sinθ).
+    Returns the saved path, or None on failure (never aborts the run).
+    """
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        u = u_all.detach().cpu().numpy()
+        c = cls_idx.detach().cpu().numpy()
+        Un = U.detach().cpu().numpy()
+        cyclic = bool(periodic_dims) or topology in ("s1", "cylinder")
+        cmap = "twilight" if cyclic else "viridis"
+        k = u.shape[1]
+
+        def _xy(arr: "np.ndarray") -> tuple["np.ndarray", "np.ndarray"]:
+            if k == 1 and cyclic:
+                return np.cos(arr[:, 0]), np.sin(arr[:, 0])
+            if k == 1:
+                return arr[:, 0], np.zeros(arr.shape[0])
+            return arr[:, 0], arr[:, 1]
+
+        fig, ax = plt.subplots(figsize=(6, 6))
+        xs, ys = _xy(u)
+        sc = ax.scatter(xs, ys, c=c, cmap=cmap, s=18, alpha=0.6, zorder=2)
+        if Un.shape[0] >= 1:
+            cx, cy = _xy(Un)
+            order = list(np.argsort(present_classes))
+            cxo, cyo = cx[order], cy[order]
+            if cyclic and len(order) > 2:
+                cxo = np.append(cxo, cxo[0])
+                cyo = np.append(cyo, cyo[0])
+            ax.plot(cxo, cyo, "-k", lw=1.0, alpha=0.7, zorder=3)
+            for idx, cls in enumerate(present_classes):
+                ax.scatter([cx[idx]], [cy[idx]], c="k", s=90, marker="*", zorder=4)
+                ax.annotate(
+                    str(cls), (cx[idx], cy[idx]), fontsize=9, zorder=5,
+                    xytext=(3, 3), textcoords="offset points",
+                )
+        fig.colorbar(sc, ax=ax, label="class index")
+        ax.set_title(f"VAE latent ({topology}) — centroids in class order")
+        ax.set_aspect("equal", "datalim")
+        os.makedirs(out_dir, exist_ok=True)
+        path = os.path.join(out_dir, f"latent_coords.{figure_format}")
+        fig.savefig(path, bbox_inches="tight")
+        plt.close(fig)
+        return path
+    except Exception as exc:  # noqa: BLE001 — diagnostic must never abort the run
+        logger.warning("latent_coords plot failed: %s", exc)
+        return None
+
+
 def _run_patch_eval(
     *,
     cfg: DictConfig,
@@ -783,6 +855,18 @@ def main(cfg: DictConfig) -> dict[str, Any]:
 
     # --- Persist latents -----------------------------------------------------
     save_tensor_results({"latents": u_all}, out_dir, "latents.safetensors")
+
+    # --- Diagnostic: latent-coordinate plot (circle vs scramble vs clusters) -
+    _plot_latent_coords(
+        u_all=u_all,
+        cls_idx=cls_idx,
+        U=U,
+        present_classes=present_classes,
+        topology=str(analysis.topology),
+        periodic_dims=list(getattr(manifold, "periodic_dims", []) or []),
+        out_dir=out_dir,
+        figure_format="png",  # diagnostic — PNG for quick eyeballing across arms/seeds
+    )
 
     # --- comparison_ready descriptor (names aligned across arms) -------------
     w_behavior = loss_weights["w_behavior"]

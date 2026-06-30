@@ -251,6 +251,56 @@ def _to_float(v: Any) -> float | None:
         return None
 
 
+def _write_summary_by_arm(rows: list[dict[str, Any]], out_dir: str) -> str:
+    """Aggregate per-arm/seed rows into one row per arm (group over seed) with
+    mean/std/n across seeds for each metric. This is the error-bar view: an arm
+    is the descriptor tuple minus seed."""
+    group_keys = [
+        "architecture", "task", "topology", "n_charts",
+        "metric", "loss_set", "layer", "token_position",
+    ]
+    agg_metrics: list[str] = []
+    for m in list(_METRIC_KEYS) + ["coherence", "distance_from_behavior_manifold"]:
+        if m not in agg_metrics:
+            agg_metrics.append(m)
+
+    groups: dict[tuple, list[dict[str, Any]]] = {}
+    for r in rows:
+        key = tuple(str(r.get(k, "")) for k in group_keys)
+        groups.setdefault(key, []).append(r)
+
+    out_rows: list[dict[str, Any]] = []
+    for key, grp in groups.items():
+        row: dict[str, Any] = dict(zip(group_keys, key))
+        row["n_seeds"] = len(grp)
+        for m in agg_metrics:
+            vals = [v for v in (_to_float(r.get(m)) for r in grp) if v is not None]
+            if vals:
+                mean = sum(vals) / len(vals)
+                std = (
+                    (sum((v - mean) ** 2 for v in vals) / (len(vals) - 1)) ** 0.5
+                    if len(vals) > 1
+                    else 0.0
+                )
+                row[f"{m}_mean"] = round(mean, 6)
+                row[f"{m}_std"] = round(std, 6)
+            else:
+                row[f"{m}_mean"] = ""
+                row[f"{m}_std"] = ""
+        out_rows.append(row)
+
+    columns = group_keys + ["n_seeds"]
+    for m in agg_metrics:
+        columns += [f"{m}_mean", f"{m}_std"]
+    path = os.path.join(out_dir, "summary_by_arm.csv")
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
+        writer.writeheader()
+        for r in out_rows:
+            writer.writerow({c: r.get(c, "") for c in columns})
+    return path
+
+
 def _write_summary_csv(rows: list[dict[str, Any]], out_dir: str) -> str:
     # Column union: descriptors first, then metric keys, then any extras.
     extra_cols: list[str] = []
@@ -470,6 +520,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         return {"summary_rows": 0, "out_dir": out_dir}
 
     _write_summary_csv(all_rows, out_dir)
+    _write_summary_by_arm(all_rows, out_dir)
     _write_ablation_matrix(all_rows, out_dir)
     _write_metric_deltas(vae_rows, baseline, out_dir)
     _make_figures(all_rows, os.path.join(out_dir, "figures"), figure_format)
