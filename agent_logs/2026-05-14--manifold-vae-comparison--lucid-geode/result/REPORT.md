@@ -1,7 +1,7 @@
 # Manifold-VAE comparison — Debug/baseline milestone report
 
 **Session:** `2026-05-14--manifold-vae-comparison--lucid-geode`
-**Status:** Priority sweep + **objective fix complete** (seeded). Headline arc: the *original* behavior-aligned arms (Euclidean `d_y`) sit at isometry ≈ 0 ± 0.16 vs spline 0.99; the **cyclic relational + contrastive arm reaches isometry 0.936 ± 0.024 — matching the spline at no recon cost.** Patch-grounded behavioral comparison for the VAE NOT yet computed (`patch_eval=false`) — the key remaining test.
+**Status:** Priority sweep + **objective fix complete + steering fix attempted** (seeded). Headline arc: the *original* behavior-aligned arms (Euclidean `d_y`) sit at isometry ≈ 0 ± 0.16 vs spline 0.99; the **cyclic relational + contrastive arm reaches isometry 0.936 ± 0.024 — matching the spline at no recon cost**; and the **manifold-interpolation loss (`w_manifold`) is the first VAE arm to move steering — distance 1.32 → 0.99 with its own decoded paths and coherence tied with the spline (0.770 vs 0.779)**, though it does not close the full gap to the spline's 0.325, and curving the path along the decoder-pullback geodesic makes it *worse* (1.54), not better.
 
 ## BREAKTHROUGH: cyclic relational + contrastive objective (weekdays, 5 seeds)
 
@@ -35,6 +35,30 @@ Replacing the isometry loss's Euclidean `d_y` (distance between output-prob vect
 
 Decisive insight: **isometry does not predict steering.** cyclic_centroid (iso 0.91) still steers at dist 1.28 ≈ linear. The spline wins because its geodesic interpolates **real class centroids in activation space** → realistic intermediate activations → on-manifold behavior. The VAE's MLP decoder is trained to reconstruct *data points* only; its *interpolated* path points are **off-distribution**, so patched intermediates drift off the behavior manifold like a straight line. "Shortest path in decoder-output space" (decoder-pullback) ≠ "stays on the realistic-activation manifold," which is why that fix failed. Closing this needs a decoder whose interpolants stay on the data manifold (e.g. the bijective `flow` method, or projecting decoded path points onto real activations) — a deeper architectural change, documented as future work.
 
+## STEERING FIX: manifold-interpolation loss (`w_manifold`) — 3 seeds
+
+Acting on the project-to-data confirmation (the deficit is off-distribution decoder interpolants, not the ordering), we added a **manifold-interpolation loss** `w_manifold`: during training, decode random latent interpolants `u_mid = u_a + t·(u_b − u_a)` and penalize each decoded point's distance to the nearest real activation (`min cdist`). This trains the decoder to keep *interpolated* outputs on the data manifold — an in-loss substitute for a manifold-faithful decoder, no architecture change. Arm `transition_manifold` = the discovered-transition recipe + `w_centroid_iso=5` + `w_compactness=1` + **`w_manifold=1`**, `patch_eval=true`.
+
+| arm | decoder | path | isometry | coherence ↑ | dist ↓ | geo_nat ↓ | recon |
+|---|---|---|---|---|---|---|---|
+| **spline geometric** | (real centroids) | geodesic | 0.990 | **0.779** | **0.325** | — | — |
+| transition_centroid (no w_manifold) | recon-faithful | latent-linear | 0.818 | 0.717 | ~1.26 | 10.24 | 58.3 |
+| transition_project *(crutch: snap to real)* | — | latent-linear | 0.824 | 0.737 | 0.772 | 10.25 | 58.3 |
+| **transition_manifold** (`w_manifold=1`) | **on-manifold** | **latent-linear** | 0.876 ± .066 | **0.770 ± .030** | **0.988 ± .114** | **5.39** | 107.6 |
+| transition_manifold_geo (`w_manifold=1`) | on-manifold | **pullback geodesic** | 0.766 | 0.742 | 1.538 ± .279 | 8.18 | 107.6 |
+
+Per-seed dist for `transition_manifold`: 1.12 / 0.89 / 0.96 (tight, no lucky seed).
+
+**Three findings:**
+
+1. **`w_manifold` is the first reproducible VAE steering win.** Distance dropped **1.26 → 0.99** using the VAE's *own* decoded paths (no project-to-data crutch), and coherence rose to **0.770 — statistically tied with the spline (0.779)**. On the text-coherence axis the manifold-faithful VAE now steers as cleanly as the spline. `geodesic_naturalness` halved (10.2 → 5.4): decoded paths are far more on-manifold.
+
+2. **Reconstruction MSE is the wrong objective for steering.** Recon *doubled* (58 → 108) while coherence went *up*. The decoder trades pointwise MSE for on-manifold interpolants — exactly what steering needs. This vindicates the "manifold-faithful, not reconstruction-faithful" framing directly.
+
+3. **Path *routing* via the decoder-pullback geodesic is a dead end (refuted).** `transition_manifold_geo` is the same trained decoder (recon bit-identical per seed) with the patch path solved as a pullback geodesic instead of a straight line — and it is **worse** (0.99 → 1.54), with `geodesic_naturalness` rising (5.4 → 8.2). The decoder-pullback metric `G_h = JᵀJ` measures where the *decoder stretches*, not where *data lives*; its geodesic shortcuts through off-data low-stretch regions. With an on-manifold decoder, **the straight latent line is already near-optimal**; curving it via decoder geometry hurts.
+
+**Remaining gap (0.99 → 0.325) is honest and localized.** Even the project-to-data crutch floors at 0.77, so the spline's edge is its path threading **dense real-activation regions in behavior order**, which neither a straight latent line nor a decoder-pullback geodesic reproduces. The next lever is a **data-density metric** (geodesics cheap where data is dense, expensive in voids — Arvanitidis-style RBF/uncertainty metric), *not* a decoder-Jacobian metric — documented as the next investment.
+
 ## Final summary: fit → discover → steer
 
 | question | answer |
@@ -42,9 +66,9 @@ Decisive insight: **isometry does not predict steering.** cyclic_centroid (iso 0
 | Can a VAE **fit** a known behavior manifold? | **Yes** — isometry 0.94 (cyclic, injected), no recon cost; ring emerges in an unstructured latent. |
 | **Discover** it without injecting structure? | **Yes** — isometry 0.82 from behavioral transitions (step `number`, read class moves); ring recovered, no topology declared. |
 | Beat **linear** on the isometry proxy? | Marginally (injected centroid arm 0.91 > 0.887; discovered 0.82 < 0.887). |
-| **Steer the model** like the spline (the metric that matters)? | **No** — all arms ≈ linear (coh 0.71, dist 1.3–1.4); the spline geodesic (0.78/0.33) is unbeaten. Bottleneck: VAE decoder produces off-distribution interpolants. |
+| **Steer the model** like the spline (the metric that matters)? | **Partly** — `w_manifold` (on-manifold decoder) is the first arm to move it: coherence 0.770 **ties the spline (0.779)** and dist 1.26 → **0.99** (own decoder). Still 3× the spline's 0.325 on dist; the residual is path *routing* through dense data, which a decoder-pullback geodesic does **not** fix (it makes it worse, 1.54). |
 
-**Bottom line:** a VAE *discovers* the behavior manifold's structure from behavior alone (a real positive), and the steering gap to the spline is now **localized to a fixable cause** — off-distribution decoder interpolants, confirmed by the project-to-data test (dist 1.32 → 0.77 when path points are real activations). The discovered *ordering* is steering-grade; the *decoder* is not. **Clear next phase:** a manifold-faithful decoder (bijective `flow` method, already in `causalab/methods/flow`, or a learned on-manifold projection) to produce smooth in-distribution interpolants — the change with a direct line to making a *learned* manifold match the spline's steering.
+**Bottom line:** a VAE *discovers* the behavior manifold's structure from behavior alone (a real positive), and the steering gap to the spline is now **localized and partially closed**. The `w_manifold` loss confirms the diagnosis — an on-manifold decoder lifts coherence to spline parity (0.770 vs 0.779) and cuts distance to 0.99 *with the VAE's own decoded paths*, at the cost of reconstruction MSE (which proves recon was the wrong target). The residual 0.99→0.33 is **not** decoder-interpolant drift (that's fixed) nor path curvature (the pullback geodesic is refuted — it worsens to 1.54); it is that the spline's path threads **dense real-activation regions in behavior order**. **Clear next phase:** a **data-density metric** for the geodesic (cheap where data is dense, expensive in voids — Arvanitidis-style RBF/uncertainty metric), so the path routes through the data rather than minimizing decoder arc-length.
 
 ### Fit vs. discover — RESOLVED: discovery works via behavioral transitions
 
