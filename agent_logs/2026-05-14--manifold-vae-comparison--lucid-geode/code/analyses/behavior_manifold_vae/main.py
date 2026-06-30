@@ -405,6 +405,23 @@ def _run_patch_eval(
 
 def main(cfg: DictConfig) -> dict[str, Any]:
     """Run the behavior_manifold_vae analysis (single VAE arm)."""
+    # Hard-cap CPU threads in-process when the sweep requests it. Env vars alone
+    # do NOT reliably constrain this torch build (observed workers pinning ~30
+    # cores each → node thrash when run in parallel). torch.set_num_threads is
+    # authoritative, so re-apply OMP_NUM_THREADS here. Unset (single one-off
+    # run) → leave torch's default so it can use the box.
+    _omp = os.environ.get("OMP_NUM_THREADS")
+    if _omp:
+        _n = max(1, int(_omp))
+        try:
+            torch.set_num_threads(_n)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            torch.set_num_interop_threads(_n)
+        except Exception:  # noqa: BLE001 — only settable before parallel work
+            pass
+
     analysis = cfg[ANALYSIS_NAME]
     root = cfg.experiment_root
     tv = cfg.task.get("target_variable")
