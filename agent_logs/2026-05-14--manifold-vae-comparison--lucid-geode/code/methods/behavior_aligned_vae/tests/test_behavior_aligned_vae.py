@@ -317,6 +317,7 @@ def test_loss_bundle_terms():
         w_isometry=0.3,
         w_geodesic=0.2,
         w_patch=0.4,
+        w_contrastive=0.0,
         behavior_distance="js",
     )
     b, c, k = 12, N_BEHAVIOR, LATENT
@@ -417,6 +418,7 @@ def test_loss_bundle_skips_zero_weight_terms():
         w_isometry=0.0,
         w_geodesic=0.0,
         w_patch=0.0,
+        w_contrastive=0.0,
         behavior_distance="kl",
     )
     b = 5
@@ -430,4 +432,137 @@ def test_loss_bundle_skips_zero_weight_terms():
     assert "recon" in metrics
     assert "kl" not in metrics
     assert "behavior" not in metrics
+    assert "contrastive" not in metrics
     assert math.isfinite(total.item())
+
+
+# ---------------------------------------------------------------------------
+# 7. Relational geometry: _cyclic_pdist correctness + contrastive_loss.
+# ---------------------------------------------------------------------------
+def test_cyclic_pdist_known_values():
+    from methods.behavior_aligned_vae.losses import _cyclic_pdist
+
+    coords = torch.tensor([0.0, 1.0, 3.0])
+    period = 7.0
+    # Raw cyclic distances: d(0,1)=1, d(0,3)=min(3,4)=3, d(1,3)=min(2,5)=2.
+    # Off-diagonal entries (with the symmetric duplicates + zero diagonal):
+    # values = [0,1,3, 1,0,2, 3,2,0]; mean = 12/9 = 1.3333...
+    out = _cyclic_pdist(coords, period)
+    raw = torch.tensor(
+        [
+            [0.0, 1.0, 3.0],
+            [1.0, 0.0, 2.0],
+            [3.0, 2.0, 0.0],
+        ]
+    )
+    expected = raw / raw.mean()
+    assert out.shape == (3, 3)
+    assert torch.allclose(out, expected, atol=1e-6)
+    # Symmetric, zero diagonal.
+    assert torch.allclose(out, out.t(), atol=1e-6)
+    assert torch.allclose(torch.diag(out), torch.zeros(3), atol=1e-6)
+
+
+def test_ordinal_pdist_known_values():
+    from methods.behavior_aligned_vae.losses import _ordinal_pdist
+
+    coords = torch.tensor([0.0, 1.0, 3.0])
+    raw = (coords.unsqueeze(1) - coords.unsqueeze(0)).abs()
+    expected = raw / raw.mean()
+    out = _ordinal_pdist(coords)
+    assert torch.allclose(out, expected, atol=1e-6)
+
+
+def test_isometry_loss_cyclic_requires_period():
+    u = torch.randn(5, 2)
+    coords = torch.arange(5).float()
+    with pytest.raises(ValueError):
+        LossBundle.isometry_loss(
+            u, geometry_coords=coords, geometry_distance="cyclic"
+        )
+
+
+def test_isometry_loss_euclidean_default_unchanged():
+    # Default (euclidean) path must equal the legacy normalized-pdist formula.
+    from methods.behavior_aligned_vae.losses import _normalized_pdist
+
+    torch.manual_seed(0)
+    u = torch.randn(6, 2)
+    targets = torch.softmax(torch.randn(6, N_BEHAVIOR), dim=-1)
+    out = LossBundle.isometry_loss(u, targets)
+    du = _normalized_pdist(u)
+    dy = _normalized_pdist(targets)
+    expected = ((du - dy) ** 2).mean()
+    assert torch.allclose(out, expected, atol=1e-7)
+
+
+def test_contrastive_loss_finite_and_order_sensitive():
+    period = 7.0
+    margin = 1.0
+    class_idx = torch.tensor([0, 1, 2, 3, 4, 5, 6])
+
+    # Latent that already respects cyclic order: place classes on a ring.
+    theta = class_idx.float() * (2 * math.pi / period)
+    u_ordered = torch.stack([torch.cos(theta), torch.sin(theta)], dim=-1)
+    loss_ordered = LossBundle.contrastive_loss(
+        u_ordered, class_idx, period=period, margin=margin, cyclic=True
+    )
+    # Scrambled latent: random positions ignoring order.
+    g = torch.Generator().manual_seed(0)
+    u_scrambled = torch.randn(7, 2, generator=g)
+    loss_scrambled = LossBundle.contrastive_loss(
+        u_scrambled, class_idx, period=period, margin=margin, cyclic=True
+    )
+    assert math.isfinite(loss_ordered.item())
+    assert math.isfinite(loss_scrambled.item())
+    assert loss_ordered.item() < loss_scrambled.item()
+
+    # Differentiable.
+    u_req = u_scrambled.clone().requires_grad_(True)
+    L = LossBundle.contrastive_loss(
+        u_req, class_idx, period=period, margin=margin, cyclic=True
+    )
+    L.backward()
+    assert u_req.grad is not None and torch.isfinite(u_req.grad).all()
+
+
+def test_contrastive_loss_handles_missing_pos_or_neg():
+    # All same class -> no negatives; should still be finite (neg side = 0).
+    u = torch.randn(4, 2)
+    same = torch.zeros(4, dtype=torch.long)
+    out = LossBundle.contrastive_loss(u, same, margin=1.0, cyclic=False)
+    assert math.isfinite(out.item())
+
+
+def test_train_cyclic_geometry_smoke():
+    feats, targets = _make_data(seed=11)
+    coords = torch.randint(0, 7, (N,)).float()
+    out = train_behavior_aligned_vae(
+        feats,
+        behavior_targets=targets,
+        method="flat_vae",
+        latent_dim=LATENT,
+        hidden_dims=HIDDEN,
+        topology="unstructured",
+        n_charts=1,
+        behavior_hidden_dims=BEH_HIDDEN,
+        n_behavior=N_BEHAVIOR,
+        loss_weights=_loss_weights(w_contrastive=2.0),
+        behavior_distance="kl",
+        lr=1e-2,
+        epochs=3,
+        batch_size=32,
+        kl_warmup_epochs=1,
+        device="cpu",
+        seed=0,
+        geometry_coords=coords,
+        geometry_distance="cyclic",
+        geometry_period=7.0,
+        contrastive_margin=1.0,
+    )
+    fm = out["final_metrics"]
+    assert "contrastive" in fm
+    assert math.isfinite(fm["contrastive"])
+    assert math.isfinite(fm["isometry"])
+    for ep in out["history"]:
+        assert math.isfinite(ep["total"])

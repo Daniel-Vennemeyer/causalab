@@ -57,6 +57,11 @@ def train_behavior_aligned_vae(
     seed: int,
     val_features: Optional[Tensor] = None,
     val_behavior_targets: Optional[Tensor] = None,
+    geometry_coords: Optional[Tensor] = None,
+    val_geometry_coords: Optional[Tensor] = None,
+    geometry_distance: str = "euclidean",
+    geometry_period: Optional[float] = None,
+    contrastive_margin: float = 1.0,
 ) -> Dict[str, Any]:
     """Train a behavior-aligned VAE and return in-memory artifacts.
 
@@ -72,6 +77,12 @@ def train_behavior_aligned_vae(
         lr, epochs, batch_size, kl_warmup_epochs: optimization knobs.
         device, seed: runtime.
         val_features, val_behavior_targets: optional validation tensors.
+        geometry_coords: optional per-example (N,) ordinal class index used by
+            the cyclic/ordinal isometry geometry and the contrastive loss.
+        geometry_distance: "euclidean" (default) | "cyclic" | "ordinal" — the
+            relational distance d_y for the isometry loss.
+        geometry_period: period for cyclic geometry/contrastive (e.g. 7).
+        contrastive_margin: latent-unit margin for the contrastive loss.
 
     Returns:
         dict with keys: "manifold" (VAEManifold), "behavior_head"
@@ -90,6 +101,8 @@ def train_behavior_aligned_vae(
     ambient_dim = features.shape[1]
     if behavior_targets is not None:
         behavior_targets = behavior_targets.to(dev).float()
+    if geometry_coords is not None:
+        geometry_coords = geometry_coords.to(dev)
 
     mean, std = _standardize_stats(features)
     features_norm = (features - mean) / (std + _EPS)
@@ -99,8 +112,11 @@ def train_behavior_aligned_vae(
         val_features_norm = (val_features - mean) / (std + _EPS)
         if val_behavior_targets is not None:
             val_behavior_targets = val_behavior_targets.to(dev).float()
+        if val_geometry_coords is not None:
+            val_geometry_coords = val_geometry_coords.to(dev)
     else:
         val_features_norm = None
+        val_geometry_coords = None
 
     # Build model.
     if method == "atlas_vae":
@@ -123,6 +139,7 @@ def train_behavior_aligned_vae(
     # Behavior head only if needed.
     w_behavior = loss_weights["w_behavior"]
     w_patch = loss_weights["w_patch"]
+    w_contrastive = loss_weights.get("w_contrastive", 0.0)
     needs_behavior = (
         w_behavior != 0.0 or w_patch != 0.0 or behavior_targets is not None
     )
@@ -141,6 +158,7 @@ def train_behavior_aligned_vae(
         w_isometry=loss_weights["w_isometry"],
         w_geodesic=loss_weights["w_geodesic"],
         w_patch=w_patch,
+        w_contrastive=w_contrastive,
         behavior_distance=behavior_distance,
     )
 
@@ -187,6 +205,9 @@ def train_behavior_aligned_vae(
             y_batch = (
                 behavior_targets[idx] if behavior_targets is not None else None
             )
+            geom_batch = (
+                geometry_coords[idx] if geometry_coords is not None else None
+            )
 
             opt.zero_grad()
             h_hat, mu, logvar, u, extra_loss, chart_entropy = _forward(h_batch)
@@ -209,6 +230,11 @@ def train_behavior_aligned_vae(
                 decoded_path=None,
                 patched_behavior=None,
                 extra_loss=extra_loss,
+                geometry_coords=geom_batch,
+                geometry_distance=geometry_distance,
+                geometry_period=geometry_period,
+                class_idx=geom_batch,
+                contrastive_margin=contrastive_margin,
             )
             # Use torch.autograd.backward (not total.backward()) so this plain
             # training step is not intercepted by nnsight's monkeypatch of
@@ -239,6 +265,10 @@ def train_behavior_aligned_vae(
                 val_features_norm,
                 val_behavior_targets,
                 is_atlas,
+                geometry_coords=val_geometry_coords,
+                geometry_distance=geometry_distance,
+                geometry_period=geometry_period,
+                contrastive_margin=contrastive_margin,
             )
             for key, val in val_metrics.items():
                 epoch_metrics[f"val_{key}"] = val
@@ -269,6 +299,9 @@ def train_behavior_aligned_vae(
         "device": device,
         "seed": seed,
         "intrinsic_dim": model.intrinsic_dim,
+        "geometry_distance": geometry_distance,
+        "geometry_period": geometry_period,
+        "contrastive_margin": contrastive_margin,
     }
 
     return {
@@ -287,6 +320,11 @@ def _evaluate(
     h: Tensor,
     y: Optional[Tensor],
     is_atlas: bool,
+    *,
+    geometry_coords: Optional[Tensor] = None,
+    geometry_distance: str = "euclidean",
+    geometry_period: Optional[float] = None,
+    contrastive_margin: float = 1.0,
 ) -> Dict[str, float]:
     model.eval()
     if behavior_head is not None:
@@ -314,5 +352,10 @@ def _evaluate(
             behavior_target=y,
             decoded_path=None,
             patched_behavior=None,
+            geometry_coords=geometry_coords,
+            geometry_distance=geometry_distance,
+            geometry_period=geometry_period,
+            class_idx=geometry_coords,
+            contrastive_margin=contrastive_margin,
         )
     return metrics

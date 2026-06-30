@@ -53,6 +53,28 @@ def _normalized_pdist(x: Tensor) -> Tensor:
     return d / scale
 
 
+def _cyclic_pdist(coords: Tensor, period: float) -> Tensor:
+    """Pairwise cyclic distance matrix on 1-D ordinal positions, normalized by
+    its mean (mirrors ``_normalized_pdist``). Shape (B, B).
+
+    ``coords`` is (B,) or (B, 1). ``d_ij = min(|c_i - c_j|, period - |c_i - c_j|)``.
+    """
+    c = coords.reshape(-1).float()
+    raw = (c.unsqueeze(1) - c.unsqueeze(0)).abs()
+    d = torch.minimum(raw, period - raw)
+    scale = d.mean().clamp_min(_EPS)
+    return d / scale
+
+
+def _ordinal_pdist(coords: Tensor) -> Tensor:
+    """Pairwise absolute-difference distance matrix on 1-D ordinal positions,
+    normalized by its mean (mirrors ``_normalized_pdist``). Shape (B, B)."""
+    c = coords.reshape(-1).float()
+    d = (c.unsqueeze(1) - c.unsqueeze(0)).abs()
+    scale = d.mean().clamp_min(_EPS)
+    return d / scale
+
+
 class LossBundle:
     """Callable bundle of weighted VAE training losses.
 
@@ -68,6 +90,7 @@ class LossBundle:
         w_isometry: float,
         w_geodesic: float,
         w_patch: float,
+        w_contrastive: float,
         behavior_distance: str,
     ):
         if behavior_distance not in _VALID_BEHAVIOR_DISTANCES:
@@ -81,6 +104,7 @@ class LossBundle:
         self.w_isometry = w_isometry
         self.w_geodesic = w_geodesic
         self.w_patch = w_patch
+        self.w_contrastive = w_contrastive
         self.behavior_distance = behavior_distance
 
     @staticmethod
@@ -97,12 +121,85 @@ class LossBundle:
         return _behavior_distance(pred_probs, target_probs, self.behavior_distance)
 
     @staticmethod
-    def isometry_loss(u: Tensor, behavior_targets: Tensor) -> Tensor:
+    def isometry_loss(
+        u: Tensor,
+        behavior_targets: Optional[Tensor] = None,
+        *,
+        geometry_coords: Optional[Tensor] = None,
+        geometry_distance: str = "euclidean",
+        geometry_period: Optional[float] = None,
+    ) -> Tensor:
         """Match the normalized pairwise-distance geometry of intrinsic coords
-        to that of the behavior targets."""
+        ``u`` to a target relational geometry ``d_y``.
+
+        ``geometry_distance``:
+          - ``"cyclic"``: ``d_y`` is the normalized cyclic distance on
+            ``geometry_coords`` (requires ``geometry_period``).
+          - ``"ordinal"``: ``d_y`` is the normalized |Δ| distance on
+            ``geometry_coords``.
+          - ``"euclidean"`` (default): ``d_y`` is the normalized Euclidean
+            pairwise distance between ``behavior_targets`` (current behavior).
+        """
         du = _normalized_pdist(u)
-        dy = _normalized_pdist(behavior_targets)
+        if geometry_distance == "cyclic" and geometry_coords is not None:
+            if geometry_period is None:
+                raise ValueError(
+                    "geometry_distance='cyclic' requires geometry_period"
+                )
+            dy = _cyclic_pdist(geometry_coords, geometry_period)
+        elif geometry_distance == "ordinal" and geometry_coords is not None:
+            dy = _ordinal_pdist(geometry_coords)
+        else:
+            if behavior_targets is None:
+                raise ValueError(
+                    "euclidean isometry geometry requires behavior_targets"
+                )
+            dy = _normalized_pdist(behavior_targets)
         return ((du - dy) ** 2).mean()
+
+    @staticmethod
+    def contrastive_loss(
+        u: Tensor,
+        class_idx: Tensor,
+        *,
+        period: Optional[float] = None,
+        margin: float,
+        cyclic: bool = True,
+    ) -> Tensor:
+        """Supervised-contrastive ordinal loss in RAW latent units.
+
+        ``class_idx`` is (B,) int class positions. Pairwise class distance
+        ``cd`` is cyclic (via ``period``) when ``cyclic`` else ``|Δ|``.
+        Positives (``cd <= 1``: same/adjacent class) are pulled together
+        (``du**2``); negatives (``cd >= 2``) are pushed past ``margin``
+        (``relu(margin - du)**2``). ``du = torch.cdist(u, u)`` is NOT
+        normalized — ``margin`` is in latent units. The diagonal is excluded;
+        an absent positive/negative side contributes 0.
+        """
+        c = class_idx.reshape(-1).float()
+        raw = (c.unsqueeze(1) - c.unsqueeze(0)).abs()
+        if cyclic:
+            if period is None:
+                raise ValueError("contrastive_loss cyclic=True requires period")
+            cd = torch.minimum(raw, period - raw)
+        else:
+            cd = raw
+
+        du = torch.cdist(u, u)
+        b = u.shape[0]
+        off_diag = ~torch.eye(b, dtype=torch.bool, device=u.device)
+        pos_mask = (cd <= 1) & off_diag
+        neg_mask = (cd >= 2) & off_diag
+
+        pos_term = du.new_zeros(())
+        if bool(pos_mask.any()):
+            pos_term = (du[pos_mask] ** 2).sum()
+        neg_term = du.new_zeros(())
+        if bool(neg_mask.any()):
+            neg_term = (torch.relu(margin - du[neg_mask]) ** 2).sum()
+
+        n_off = off_diag.sum().clamp_min(1)
+        return (pos_term + neg_term) / n_off
 
     @staticmethod
     def geodesic_loss(decoded_path: Tensor) -> Tensor:
@@ -125,6 +222,11 @@ class LossBundle:
         decoded_path: Optional[Tensor] = None,
         patched_behavior: Optional[Tensor] = None,
         extra_loss: Optional[Tensor] = None,
+        geometry_coords: Optional[Tensor] = None,
+        geometry_distance: str = "euclidean",
+        geometry_period: Optional[float] = None,
+        class_idx: Optional[Tensor] = None,
+        contrastive_margin: float = 1.0,
     ) -> Tuple[Tensor, Dict[str, float]]:
         """Return ``(total_loss, metrics)``.
 
@@ -167,12 +269,26 @@ class LossBundle:
             metrics["behavior"] = beh.item()
 
         if self.w_isometry != 0.0:
-            if u is None or behavior_target is None:
+            if u is None:
                 raise ValueError(
-                    "isometry term enabled (w_isometry != 0) but u/behavior_target "
-                    "not supplied"
+                    "isometry term enabled (w_isometry != 0) but u not supplied"
                 )
-            iso = self.isometry_loss(u, behavior_target)
+            uses_geometry = (
+                geometry_distance in ("cyclic", "ordinal")
+                and geometry_coords is not None
+            )
+            if not uses_geometry and behavior_target is None:
+                raise ValueError(
+                    "isometry term enabled (w_isometry != 0) but behavior_target "
+                    "not supplied for euclidean geometry"
+                )
+            iso = self.isometry_loss(
+                u,
+                behavior_target,
+                geometry_coords=geometry_coords,
+                geometry_distance=geometry_distance,
+                geometry_period=geometry_period,
+            )
             total = total + self.w_isometry * iso
             metrics["isometry"] = iso.item()
 
@@ -190,6 +306,22 @@ class LossBundle:
             patch = self.behavior_loss(patched_behavior, behavior_target)
             total = total + self.w_patch * patch
             metrics["patch"] = patch.item()
+
+        if self.w_contrastive != 0.0:
+            if u is None or class_idx is None:
+                raise ValueError(
+                    "contrastive term enabled (w_contrastive != 0) but u/class_idx "
+                    "not supplied"
+                )
+            con = self.contrastive_loss(
+                u,
+                class_idx,
+                period=geometry_period,
+                margin=contrastive_margin,
+                cyclic=(geometry_distance == "cyclic"),
+            )
+            total = total + self.w_contrastive * con
+            metrics["contrastive"] = con.item()
 
         if extra_loss is not None:
             total = total + extra_loss

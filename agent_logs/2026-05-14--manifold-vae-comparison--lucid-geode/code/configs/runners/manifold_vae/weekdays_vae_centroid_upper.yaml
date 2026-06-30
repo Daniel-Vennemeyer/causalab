@@ -1,0 +1,38 @@
+# @package _global_
+# Priority sweep — upper bound: train the flat VAE directly on the W per-class
+# centroid features (cyclic d_y + strong contrastive), the cleanest possible
+# supervision signal. Establishes the best achievable cyclic-order recovery.
+# Run against the SAME --experiment-root as weekdays_current_spline.
+defaults:
+  - /base
+  - /task: natural_domains_arithmetic_weekdays
+  - /model: llama31_8b
+  - /analysis/behavior_manifold_vae
+  - _self_
+
+task:
+  target_variable: result
+
+behavior_manifold_vae:
+  method: flat_vae
+  topology: unstructured
+  metric: latent_linear
+  latent_dim: 2
+  n_charts: 1
+  layers: [28]
+  token_positions: [last_token]
+  train_on_centroids: true
+  loss_weights:
+    w_recon: 1.0
+    w_kl: 0.01
+    w_behavior: 2.0
+    w_isometry: 10.0
+    w_geodesic: 0.0
+    w_patch: 0.0
+    w_contrastive: 5.0
+  behavior_geometry: cyclic
+  behavior_period: 7
+  epochs: 1000
+  batch_size: 7
+  patch_eval: false
+  device: cpu

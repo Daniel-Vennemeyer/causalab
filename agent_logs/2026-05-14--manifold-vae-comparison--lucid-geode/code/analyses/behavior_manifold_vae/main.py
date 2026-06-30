@@ -531,7 +531,19 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         "w_isometry": float(analysis.loss_weights.w_isometry),
         "w_geodesic": float(analysis.loss_weights.w_geodesic),
         "w_patch": float(analysis.loss_weights.w_patch),
+        "w_contrastive": float(analysis.loss_weights.get("w_contrastive", 0.0)),
     }
+
+    # --- Relational-geometry knobs (defaults preserve euclidean behavior) ----
+    behavior_geometry = str(analysis.get("behavior_geometry", "euclidean"))
+    behavior_period_cfg = analysis.get("behavior_period", None)
+    geometry_period = (
+        float(behavior_period_cfg) if behavior_period_cfg is not None else float(W)
+    )
+    contrastive_margin = float(analysis.get("contrastive_margin", 1.0))
+    train_on_centroids = bool(analysis.get("train_on_centroids", False))
+    # Per-example ordinal class positions; double as contrastive class_idx.
+    geometry_coords = cls_idx.float()
 
     baseline_dir = os.path.join(root, "baseline")
     baseline_path = os.path.join(baseline_dir, "per_class_output_dists.safetensors")
@@ -555,25 +567,53 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         loss_weights["w_isometry"] = 0.0
         loss_weights["w_patch"] = 0.0
 
-    # --- Validation split (last 10% of rows) ---------------------------------
-    n = features.shape[0]
-    n_val = max(1, int(round(0.1 * n))) if n >= 10 else 0
-    if n_val > 0:
-        train_slice = slice(0, n - n_val)
-        val_slice = slice(n - n_val, n)
-        train_features = features[train_slice]
-        val_features = features[val_slice]
-        train_targets = (
-            behavior_targets[train_slice] if behavior_targets is not None else None
-        )
-        val_targets = (
-            behavior_targets[val_slice] if behavior_targets is not None else None
+    # --- Build the training set ----------------------------------------------
+    # Centroid-supervised upper bound: train on per-class mean features (W rows)
+    # against per-class behavior targets, with ordinal coords arange(W). No val
+    # split (W is tiny). Downstream metrics still encode the FULL feature set, so
+    # the module-level ``features``/``cls_idx`` are left untouched.
+    if train_on_centroids:
+        if not behavior_targets_available:
+            raise ValueError(
+                "train_on_centroids=true requires baseline per-class output "
+                "distributions, but none were found."
+            )
+        present_t = torch.unique(cls_idx, sorted=True)
+        feat_rows = [features[cls_idx == int(c)].mean(dim=0) for c in present_t]
+        train_features = torch.stack(feat_rows, dim=0)  # (Wp, ambient)
+        train_targets = target_per_class[present_t]  # (Wp, W)
+        train_geometry_coords = present_t.float()
+        val_features = None
+        val_targets = None
+        val_geometry_coords = None
+        logger.info(
+            "centroid-supervised mode ON: training on %d per-class centroid rows",
+            train_features.shape[0],
         )
     else:
-        train_features = features
-        val_features = None
-        train_targets = behavior_targets
-        val_targets = None
+        # --- Validation split (last 10% of rows) -----------------------------
+        n = features.shape[0]
+        n_val = max(1, int(round(0.1 * n))) if n >= 10 else 0
+        if n_val > 0:
+            train_slice = slice(0, n - n_val)
+            val_slice = slice(n - n_val, n)
+            train_features = features[train_slice]
+            val_features = features[val_slice]
+            train_targets = (
+                behavior_targets[train_slice] if behavior_targets is not None else None
+            )
+            val_targets = (
+                behavior_targets[val_slice] if behavior_targets is not None else None
+            )
+            train_geometry_coords = geometry_coords[train_slice]
+            val_geometry_coords = geometry_coords[val_slice]
+        else:
+            train_features = features
+            val_features = None
+            train_targets = behavior_targets
+            val_targets = None
+            train_geometry_coords = geometry_coords
+            val_geometry_coords = None
 
     # --- Train the VAE arm ---------------------------------------------------
     result = train_behavior_aligned_vae(
@@ -596,6 +636,11 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         seed=cfg.seed,
         val_features=val_features,
         val_behavior_targets=val_targets,
+        geometry_coords=train_geometry_coords,
+        val_geometry_coords=val_geometry_coords,
+        geometry_distance=behavior_geometry,
+        geometry_period=geometry_period,
+        contrastive_margin=contrastive_margin,
     )
     manifold = result["manifold"]
     behavior_head = result["behavior_head"]
@@ -921,6 +966,9 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         "isometry_pearson_r": metrics["isometry_pearson_r"],
         "geodesic_naturalness": metrics["geodesic_naturalness"],
         "patch_consistency": metrics["patch_consistency"],
+        "behavior_geometry": behavior_geometry,
+        "train_on_centroids": train_on_centroids,
+        "w_contrastive": loss_weights["w_contrastive"],
     }
     # Patched behavioral-axis scores (only present when patch_eval=true). Use the
     # SAME keys as the spline so both arms populate the same compare columns.
@@ -942,6 +990,10 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         "subspace": ss_sub,
         "loss_weights": loss_weights,
         "behavior_targets_available": behavior_targets_available,
+        "behavior_geometry": behavior_geometry,
+        "behavior_period": geometry_period,
+        "contrastive_margin": contrastive_margin,
+        "train_on_centroids": train_on_centroids,
         "ckpt_format": ckpt_format,
         "model": cfg.model.name,
         "task": cfg.task.name,
