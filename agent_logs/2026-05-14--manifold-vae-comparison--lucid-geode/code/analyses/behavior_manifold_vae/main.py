@@ -335,11 +335,12 @@ def _run_patch_eval(
                     behavior_fn=behavior_fn,
                 )
 
+        from tqdm import tqdm
+
         pair_dists_list: list[torch.Tensor] = []
         n_pairs_used = 0
-        for (i, j) in itertools.combinations(range(Wp), 2):
-            if n_pairs_used >= patch_max_pairs:
-                break
+        _patch_pairs = list(itertools.combinations(range(Wp), 2))[:patch_max_pairs]
+        for (i, j) in tqdm(_patch_pairs, desc=f"patch[{analysis.metric}]: 8B forwards/pair"):
             if use_geodesic:
                 path = solver.geodesic(
                     U[i],
@@ -700,7 +701,12 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                         behavior_fn=behavior_fn,
                     )
 
-                for a, b in zip(ia.tolist(), ja.tolist()):
+                from tqdm import tqdm
+
+                for a, b in tqdm(
+                    list(zip(ia.tolist(), ja.tolist())),
+                    desc=f"isometry geodesics [{analysis.metric}]",
+                ):
                     path = solver.geodesic(
                         U[a],
                         U[b],

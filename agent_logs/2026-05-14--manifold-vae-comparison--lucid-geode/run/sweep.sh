@@ -65,7 +65,18 @@ DEVICE="${DEVICE:-cuda}"
 # per run, so it is forced serial (multiple 8B models would OOM the GPU).
 JOBS="${JOBS:-4}"
 if [ "${PATCH:-0}" = "1" ]; then JOBS=1; fi
-echo "DEVICE = ${DEVICE}   JOBS = ${JOBS}"
+
+# Optional: cap geodesic-solver iterations (the metric arms' dominant compute —
+# ~10s at the config default of 100). GEO_ITERS=40 ≈ 2.5x faster for those arms
+# with negligible path-quality loss on a 2-D latent. Empty = use the config.
+GEO_OVERRIDE=""
+if [ -n "${GEO_ITERS:-}" ]; then
+  GEO_OVERRIDE="behavior_manifold_vae.geodesic.n_iters=${GEO_ITERS}"
+fi
+
+n_runs=$(( ${#ARMS[@]} * ${#SEEDS_ARR[@]} ))
+echo "DEVICE = ${DEVICE}   JOBS = ${JOBS}   runs = ${n_runs} (${#ARMS[@]} arms × ${#SEEDS_ARR[@]} seeds)"
+[ -n "${GEO_OVERRIDE}" ] && echo "GEO override: ${GEO_OVERRIDE}"
 echo
 
 # One run. Always returns 0 (failures are logged, not fatal) so a single bad arm
@@ -73,10 +84,21 @@ echo
 run_one() {  # run_one <arm> <seed>
   local arm="$1" seed="$2"
   local log="${LOG_DIR}/run_${arm}_seed${seed}.log"
+  local rc=0
   echo ">>> ${arm} seed=${seed}"
-  if ./scripts/run_exp.sh --experiment-root "${EXP_ROOT}" "${arm}" \
-        model="${MODEL}" seed="${seed}" behavior_manifold_vae.device="${DEVICE}" \
-        ${PATCH_OVERRIDE:+$PATCH_OVERRIDE} > "${log}" 2>&1; then
+  if [ "${JOBS}" = "1" ]; then
+    # serial → stream live so the in-run tqdm progress bars are visible, tee to log
+    ./scripts/run_exp.sh --experiment-root "${EXP_ROOT}" "${arm}" \
+      model="${MODEL}" seed="${seed}" behavior_manifold_vae.device="${DEVICE}" \
+      ${PATCH_OVERRIDE:+$PATCH_OVERRIDE} ${GEO_OVERRIDE:+$GEO_OVERRIDE} 2>&1 | tee "${log}"
+    rc=${PIPESTATUS[0]}
+  else
+    # parallel → quiet to log (interleaved live bars would be unreadable)
+    ./scripts/run_exp.sh --experiment-root "${EXP_ROOT}" "${arm}" \
+      model="${MODEL}" seed="${seed}" behavior_manifold_vae.device="${DEVICE}" \
+      ${PATCH_OVERRIDE:+$PATCH_OVERRIDE} ${GEO_OVERRIDE:+$GEO_OVERRIDE} > "${log}" 2>&1 || rc=$?
+  fi
+  if [ "${rc}" = "0" ]; then
     echo "    done -> ${log}"
   else
     echo "    FAILED -> ${log} (see log)"
@@ -84,7 +106,7 @@ run_one() {  # run_one <arm> <seed>
   fi
 }
 export -f run_one
-export EXP_ROOT MODEL DEVICE LOG_DIR PATCH_OVERRIDE
+export EXP_ROOT MODEL DEVICE LOG_DIR PATCH_OVERRIDE GEO_OVERRIDE JOBS
 
 # Run all (arm, seed) combos with up to JOBS concurrent workers (xargs -P is
 # portable across bash versions; runs are independent so this just hides the
