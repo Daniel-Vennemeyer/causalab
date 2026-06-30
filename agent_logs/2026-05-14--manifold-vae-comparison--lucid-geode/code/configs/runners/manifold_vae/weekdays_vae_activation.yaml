@@ -1,0 +1,39 @@
+# @package _global_
+# (B) LABEL-FREE activation-geometry arm. The latent is trained to preserve the
+# pairwise-distance geometry of the input activations (recon + KL +
+# activation-isometry only) — NO class labels, NO behavior supervision, NO
+# topology/period injected. Tests the key question: is the behavioral ring
+# already present in the layer-28 activations and recoverable without telling
+# the model the structure? If isometry-vs-belief rises here, the geometry is in
+# the activations; if it stays ~0, the structure lives only in the task
+# mechanism (and needs behavioral-transition grounding — see plan/transition_dy_design.md).
+defaults:
+  - /base
+  - /task: natural_domains_arithmetic_weekdays
+  - /model: llama31_8b
+  - /analysis/behavior_manifold_vae
+  - _self_
+
+task:
+  target_variable: result
+
+behavior_manifold_vae:
+  method: flat_vae
+  topology: unstructured
+  metric: latent_linear
+  latent_dim: 2
+  n_charts: 1
+  layers: [28]
+  token_positions: [last_token]
+  behavior_geometry: activation     # d_y = pairwise distance of input activations
+  loss_weights:
+    w_recon: 1.0
+    w_kl: 0.01
+    w_behavior: 0.0                 # no behavior head / no labels
+    w_isometry: 5.0                 # preserve activation neighborhoods in the latent
+    w_geodesic: 0.0
+    w_patch: 0.0
+    w_contrastive: 0.0
+  patch_eval: false
+  device: cpu
+  arm_label: activation

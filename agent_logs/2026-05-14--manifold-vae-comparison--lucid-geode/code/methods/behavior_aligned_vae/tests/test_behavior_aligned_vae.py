@@ -566,3 +566,44 @@ def test_train_cyclic_geometry_smoke():
     assert math.isfinite(fm["isometry"])
     for ep in out["history"]:
         assert math.isfinite(ep["total"])
+
+
+def test_isometry_activation_mode_label_free():
+    """geometry_distance='activation' uses input-activation distances as d_y
+    (no labels/behavior); loss is finite and zero when u == activations."""
+    lb = LossBundle(
+        w_recon=1.0, w_kl=0.0, w_behavior=0.0, w_isometry=1.0,
+        w_geodesic=0.0, w_patch=0.0, w_contrastive=0.0,
+        behavior_distance="hellinger",
+    )
+    torch.manual_seed(0)
+    h = torch.randn(16, 8)
+    # u proportional to h (same geometry) -> normalized pdists match -> ~0 loss
+    iso_same = lb.isometry_loss(
+        h.clone(), geometry_distance="activation", activation_targets=h
+    )
+    assert torch.isfinite(iso_same) and float(iso_same) < 1e-6
+    iso_rand = lb.isometry_loss(
+        torch.randn(16, 2), geometry_distance="activation", activation_targets=h
+    )
+    assert torch.isfinite(iso_rand)
+    with pytest.raises(ValueError):
+        lb.isometry_loss(h, geometry_distance="activation")  # needs activation_targets
+
+
+def test_train_activation_geometry_no_labels():
+    """train_behavior_aligned_vae runs label-free with activation isometry."""
+    torch.manual_seed(0)
+    feats = torch.randn(48, 12)
+    res = train_behavior_aligned_vae(
+        feats, behavior_targets=None, method="flat_vae", latent_dim=2,
+        hidden_dims=[32, 32], topology="unstructured", n_charts=1,
+        behavior_hidden_dims=[16], n_behavior=7,
+        loss_weights=dict(w_recon=1.0, w_kl=0.01, w_behavior=0.0, w_isometry=5.0,
+                          w_geodesic=0.0, w_patch=0.0, w_contrastive=0.0),
+        behavior_distance="hellinger", lr=1e-3, epochs=3, batch_size=16,
+        kl_warmup_epochs=1, device="cpu", seed=0,
+        geometry_distance="activation",
+    )
+    assert math.isfinite(res["final_metrics"]["isometry"])
+    assert res["behavior_head"] is None  # no behavior supervision

@@ -16,7 +16,7 @@ loss_weights:
   w_patch: 0.0
   w_contrastive: 0.0
 behavior_distance: hellinger   # kl | hellinger | js
-behavior_geometry: euclidean    # euclidean | cyclic | ordinal  (d_y for the isometry loss)
+behavior_geometry: euclidean    # euclidean | cyclic | ordinal | activation  (d_y for isometry; "activation" = label-free, match latent to input-activation distances)
 behavior_period: null           # null -> use n_classes (W); 7 for weekdays cyclic
 contrastive_margin: 1.0
 train_on_centroids: false

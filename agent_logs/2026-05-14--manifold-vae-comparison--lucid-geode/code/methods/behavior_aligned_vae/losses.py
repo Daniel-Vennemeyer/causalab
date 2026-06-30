@@ -128,6 +128,7 @@ class LossBundle:
         geometry_coords: Optional[Tensor] = None,
         geometry_distance: str = "euclidean",
         geometry_period: Optional[float] = None,
+        activation_targets: Optional[Tensor] = None,
     ) -> Tensor:
         """Match the normalized pairwise-distance geometry of intrinsic coords
         ``u`` to a target relational geometry ``d_y``.
@@ -137,6 +138,11 @@ class LossBundle:
             ``geometry_coords`` (requires ``geometry_period``).
           - ``"ordinal"``: ``d_y`` is the normalized |Δ| distance on
             ``geometry_coords``.
+          - ``"activation"``: ``d_y`` is the normalized Euclidean pairwise
+            distance between the input ``activation_targets`` (h). LABEL-FREE
+            and behavior-free — preserves activation-space neighborhoods in the
+            latent. Tests whether the behavioral geometry is already present in
+            the activations (recoverable without any topology/label injection).
           - ``"euclidean"`` (default): ``d_y`` is the normalized Euclidean
             pairwise distance between ``behavior_targets`` (current behavior).
         """
@@ -149,6 +155,12 @@ class LossBundle:
             dy = _cyclic_pdist(geometry_coords, geometry_period)
         elif geometry_distance == "ordinal" and geometry_coords is not None:
             dy = _ordinal_pdist(geometry_coords)
+        elif geometry_distance == "activation":
+            if activation_targets is None:
+                raise ValueError(
+                    "geometry_distance='activation' requires activation_targets"
+                )
+            dy = _normalized_pdist(activation_targets)
         else:
             if behavior_targets is None:
                 raise ValueError(
@@ -276,7 +288,7 @@ class LossBundle:
             uses_geometry = (
                 geometry_distance in ("cyclic", "ordinal")
                 and geometry_coords is not None
-            )
+            ) or geometry_distance == "activation"
             if not uses_geometry and behavior_target is None:
                 raise ValueError(
                     "isometry term enabled (w_isometry != 0) but behavior_target "
@@ -288,6 +300,7 @@ class LossBundle:
                 geometry_coords=geometry_coords,
                 geometry_distance=geometry_distance,
                 geometry_period=geometry_period,
+                activation_targets=h,
             )
             total = total + self.w_isometry * iso
             metrics["isometry"] = iso.item()
