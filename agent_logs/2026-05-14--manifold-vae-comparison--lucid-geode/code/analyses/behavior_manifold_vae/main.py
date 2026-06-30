@@ -106,6 +106,230 @@ def _per_class_centroids(
     return torch.stack(rows, dim=0), present
 
 
+def _resample_path(path: torch.Tensor, num_steps: int) -> torch.Tensor:
+    """Linearly resample a ``(P, k)`` path to exactly ``num_steps`` points.
+
+    Used to bring a GeodesicSolver path (built with ``geodesic.n_points``
+    interior resolution) onto the ``patch_num_steps`` grid the scorers expect.
+    """
+    if path.shape[0] == num_steps:
+        return path
+    src = torch.linspace(0.0, 1.0, path.shape[0], dtype=path.dtype)
+    dst = torch.linspace(0.0, 1.0, num_steps, dtype=path.dtype)
+    cols = []
+    for c in range(path.shape[1]):
+        # torch has no batched 1-D interp; loop over the few intrinsic dims.
+        cols.append(_interp1d(dst, src, path[:, c]))
+    return torch.stack(cols, dim=-1)
+
+
+def _interp1d(x: torch.Tensor, xp: torch.Tensor, fp: torch.Tensor) -> torch.Tensor:
+    """numpy.interp analogue for monotonically-increasing ``xp``."""
+    idx = torch.searchsorted(xp, x).clamp(1, xp.shape[0] - 1)
+    x0 = xp[idx - 1]
+    x1 = xp[idx]
+    y0 = fp[idx - 1]
+    y1 = fp[idx]
+    w = ((x - x0) / (x1 - x0).clamp(min=1e-12)).clamp(0.0, 1.0)
+    return y0 + w * (y1 - y0)
+
+
+def _run_patch_eval(
+    *,
+    cfg: DictConfig,
+    analysis: Any,
+    task: Any,
+    root: str,
+    tv: str | None,
+    layer: int,
+    token_position: str,
+    subspace_out_dir: str,
+    ss_method: str,
+    ss_meta: dict,
+    manifold: Any,
+    behavior_fn: Any,
+    U: torch.Tensor,
+    present_classes: list[int],
+    pdims: list[int] | None,
+    pers: list[float] | None,
+    metrics: dict[str, Any],
+    notes: dict[str, str],
+    comparison_extra: dict[str, Any],
+) -> None:
+    """Decode VAE-steered class-centroid-pair paths into the frozen LM and score
+    them on the spline's behavioral axes (coherence + distance_from_behavior_manifold).
+
+    Mirrors ``path_steering``: build the interchange target, compose the
+    subspace featurizer with the VAE manifold featurizer onto the unit, build
+    ``var_indices``/``eval_samples``, collect per-step output distributions for
+    each present class pair, stack into ``(n_pairs, num_steps, n_prompts, W)``,
+    and run the two scorers. Writes the patched scores into ``metrics`` and
+    ``comparison_extra`` (compare-column keys ``coherence`` /
+    ``distance_from_behavior_manifold``, plus ``patch_consistency``).
+    """
+    import itertools
+
+    from causalab.io.pipelines import load_pipeline
+    from causalab.runner.helpers import build_targets_for_grid
+    from causalab.analyses.subspace import load_subspace_onto_target
+    from causalab.analyses.path_steering.path_mode import _build_geodesic_path
+    from causalab.methods.spline.featurizer import ManifoldFeaturizer
+    from causalab.methods.metric import tokenize_variable_values
+    from causalab.methods.steer.collect import collect_grid_distributions
+    from causalab.methods.scores import coherence, distance_from_behavior_manifold
+    from causalab.tasks.loader import load_task_counterfactuals
+
+    Wp = U.shape[0]
+    if Wp < 2:
+        notes["patch_consistency_skipped"] = "fewer than 2 non-empty classes"
+        metrics["patch_consistency"] = None
+        return
+
+    patch_n_prompts = int(analysis.patch_n_prompts)
+    patch_num_steps = int(analysis.patch_num_steps)
+    patch_max_pairs = int(analysis.patch_max_pairs)
+    patch_batch_size = int(analysis.patch_batch_size)
+
+    # --- Load the frozen model (only now, only when patch_eval) --------------
+    pipeline = load_pipeline(
+        model_name=cfg.model.name,
+        task=task,
+        max_new_tokens=cfg.task.max_new_tokens,
+        device=cfg.model.get("device", "cuda"),
+        dtype=cfg.model.get("dtype"),
+        eager_attn=cfg.model.get("eager_attn"),
+    )
+
+    try:
+        # --- Belief manifold (for distance_from_behavior_manifold) -----------
+        om_root = os.path.join(root, "output_manifold")
+        bm_sub = None
+        if os.path.isdir(om_root):
+            for name in sorted(os.listdir(om_root)):
+                if os.path.isdir(os.path.join(om_root, name)):
+                    bm_sub = name
+                    break
+        if bm_sub is None:
+            notes["patch_consistency_skipped"] = (
+                "no output_manifold belief manifold found; cannot score "
+                "distance_from_behavior_manifold"
+            )
+            metrics["patch_consistency"] = None
+            return
+        if tv:
+            bm_sub = os.path.join(bm_sub, tv)
+        belief_manifold, _ = load_output_manifold(root, bm_sub)
+
+        # --- Interchange target + composed featurizer (mirror path_steering) -
+        targets, _tp_list = build_targets_for_grid(
+            pipeline, task, [layer], position_names=[token_position]
+        )
+        interchange_target = next(iter(targets.values()))
+
+        k_features = ss_meta.get("k_features")
+        load_subspace_onto_target(
+            interchange_target, subspace_out_dir, ss_method, k_features
+        )
+        unit = interchange_target.flatten()[0]
+        subspace_feat = unit.featurizer
+        # n_features is the PCA-subspace dimensionality (the VAE's ambient dim);
+        # the VAE handles its own standardization internally, so no
+        # StandardizeFeaturizer stage is added.
+        manifold_feat = ManifoldFeaturizer(manifold, n_features=int(k_features))
+        composed = subspace_feat >> manifold_feat
+        unit.set_featurizer(composed)
+
+        # --- var_indices + eval_samples (mirror path_steering) ---------------
+        values = task.intervention_values
+        var_indices = tokenize_variable_values(
+            pipeline.tokenizer, values, task.result_token_pattern
+        )
+        cf_mod = load_task_counterfactuals(task.name)
+        filtered_samples = cf_mod.generate_dataset(
+            task.causal_model, patch_n_prompts, cfg.seed + 100
+        )
+        eval_samples = filtered_samples[:patch_n_prompts]
+
+        # --- Build + collect per class-centroid pair -------------------------
+        use_geodesic = analysis.metric in ("decoder_pullback", "behavior_pullback")
+        if use_geodesic:
+            solver = GeodesicSolver()
+
+            def metric_fn(u: torch.Tensor) -> torch.Tensor:
+                return compute_metric(
+                    analysis.metric,
+                    u,
+                    decode_fn=manifold.decode,
+                    behavior_fn=behavior_fn,
+                )
+
+        pair_dists_list: list[torch.Tensor] = []
+        n_pairs_used = 0
+        for (i, j) in itertools.combinations(range(Wp), 2):
+            if n_pairs_used >= patch_max_pairs:
+                break
+            if use_geodesic:
+                path = solver.geodesic(
+                    U[i],
+                    U[j],
+                    metric_fn=metric_fn,
+                    n_points=int(analysis.geodesic.n_points),
+                    n_iters=int(analysis.geodesic.n_iters),
+                    lr=float(analysis.geodesic.lr),
+                    periodic_dims=pdims,
+                    periods=pers,
+                )
+                grid_points = _resample_path(path, patch_num_steps)
+            else:
+                # latent_linear: straight line in intrinsic space with periodic
+                # shortest-arc wrap (manifold carries periodic_dims/periods).
+                grid_points = _build_geodesic_path(
+                    U[i], U[j], patch_num_steps, manifold
+                )
+
+            # (patch_num_steps, n_prompts, W)
+            probs = collect_grid_distributions(
+                pipeline=pipeline,
+                grid_points=grid_points,
+                interchange_target=interchange_target,
+                filtered_samples=eval_samples,
+                var_indices=var_indices,
+                batch_size=patch_batch_size,
+                n_base_samples=patch_n_prompts,
+                average=False,
+                full_vocab_softmax=True,
+            )
+            pair_dists_list.append(probs)
+            n_pairs_used += 1
+
+        # (n_pairs, patch_num_steps, n_prompts, W)
+        pair_distributions = torch.stack(pair_dists_list)
+
+        # --- Score on the spline's behavioral axes ---------------------------
+        coh = coherence.compute_score(pair_distributions)
+        dist = distance_from_behavior_manifold.compute_score(
+            pair_distributions, belief_manifold=belief_manifold
+        )
+        coherence_patched = float(coh["mean"])
+        distance_patched = float(dist["mean"])
+
+        # Same compare-column keys as the spline arm, plus patch_consistency.
+        metrics["coherence"] = coherence_patched
+        metrics["distance_from_behavior_manifold"] = distance_patched
+        metrics["patch_consistency"] = coherence_patched
+        comparison_extra["coherence"] = coherence_patched
+        comparison_extra["distance_from_behavior_manifold"] = distance_patched
+        comparison_extra["patch_consistency"] = coherence_patched
+        notes["patch_consistency"] = (
+            f"patched VAE-decoded paths; patch_n_prompts={patch_n_prompts}, "
+            f"patch_num_steps={patch_num_steps}, n_pairs={n_pairs_used}"
+        )
+    finally:
+        del pipeline
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+
 def main(cfg: DictConfig) -> dict[str, Any]:
     """Run the behavior_manifold_vae analysis (single VAE arm)."""
     analysis = cfg[ANALYSIS_NAME]
@@ -337,6 +561,10 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         "patch_consistency": None,
     }
     notes: dict[str, str] = {}
+    # Extra metrics keyed into BOTH metrics.json and comparison_ready.json. The
+    # patch_eval branch fills these with the patched behavioral-axis scores so
+    # the VAE arm lands in the SAME compare columns as the spline.
+    comparison_extra: dict[str, Any] = {}
 
     pdims = manifold.periodic_dims or None
     pers = manifold.periods or None
@@ -497,18 +725,38 @@ def main(cfg: DictConfig) -> dict[str, Any]:
     else:
         notes.setdefault("geodesic_naturalness_skipped", "no decoded paths built")
 
-    # --- patch_consistency: out of scope for the debug pass ------------------
+    # --- patch_consistency: decode steered VAE paths into the frozen LM ------
+    # When patch_eval=false (debug path) keep the exact prior behavior: null +
+    # note, no model load. When true, decode each class-centroid-pair path
+    # (built in intrinsic space) through the composed subspace>>VAE featurizer,
+    # patch it at (layer, token_position) into the frozen model, and score the
+    # resulting output distributions on the SAME behavioral axes as the spline
+    # (coherence + distance_from_behavior_manifold).
     if not analysis.patch_eval:
         metrics["patch_consistency"] = None
         notes["patch_consistency_skipped"] = "patch_eval=false"
-        # TODO(patch_eval): a real patch implementation would, for each decoded
-        # geodesic point, lift the PCA-subspace point back into the residual
-        # stream via the inverse of the subspace featurizer, patch it at
-        # (layer, token_position) into a frozen forward pass, read the model's
-        # output behavior distribution, and compare it (e.g. Hellinger) to the
-        # behavior target interpolated along the same path. This requires the
-        # full model weights and is deferred until after the single-site debug
-        # arm is stable.
+    else:
+        _run_patch_eval(
+            cfg=cfg,
+            analysis=analysis,
+            task=task,
+            root=root,
+            tv=tv,
+            layer=layer,
+            token_position=token_position,
+            subspace_out_dir=subspace_out_dir,
+            ss_method=ss_method,
+            ss_meta=ss_meta,
+            manifold=manifold,
+            behavior_fn=behavior_fn,
+            U=U,
+            present_classes=present_classes,
+            pdims=pdims,
+            pers=pers,
+            metrics=metrics,
+            notes=notes,
+            comparison_extra=comparison_extra,
+        )
 
     if notes:
         metrics["notes"] = notes
@@ -567,6 +815,9 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         "geodesic_naturalness": metrics["geodesic_naturalness"],
         "patch_consistency": metrics["patch_consistency"],
     }
+    # Patched behavioral-axis scores (only present when patch_eval=true). Use the
+    # SAME keys as the spline so both arms populate the same compare columns.
+    comparison_ready.update(comparison_extra)
 
     # --- Persist metrics + comparison_ready + metadata -----------------------
     save_json_results(metrics, out_dir, "metrics.json")

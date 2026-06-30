@@ -348,6 +348,67 @@ def test_loss_bundle_terms():
         assert math.isfinite(metrics[term])
 
 
+# ---------------------------------------------------------------------------
+# 6. fwd/inv flow-compatibility + ManifoldFeaturizer composition.
+# ---------------------------------------------------------------------------
+def test_fwd_inv_roundtrip_and_manifold_featurizer():
+    from causalab.methods.spline.featurizer import ManifoldFeaturizer
+    from causalab.neural.featurizer import Featurizer
+
+    feats, _ = _make_data(seed=7)
+    out = train_behavior_aligned_vae(
+        feats,
+        method="flat_vae",
+        latent_dim=LATENT,
+        hidden_dims=HIDDEN,
+        topology="r2",
+        n_charts=1,
+        behavior_hidden_dims=BEH_HIDDEN,
+        n_behavior=N_BEHAVIOR,
+        loss_weights=_loss_weights(w_behavior=0.0, w_isometry=0.0),
+        behavior_distance="kl",
+        lr=1e-2,
+        epochs=2,
+        batch_size=32,
+        kl_warmup_epochs=1,
+        device="cpu",
+        seed=0,
+    )
+    m: VAEManifold = out["manifold"]
+    x = feats[:10]
+
+    # fwd returns (z, logdet): z is intrinsic-dim, logdet is a (B,) zero vector.
+    z, logdet = m.fwd(x)
+    assert z.shape == (10, m.intrinsic_dim)
+    assert logdet.shape == (10,)
+    assert torch.allclose(logdet, torch.zeros_like(logdet))
+
+    # inv(fwd(x)) ≈ project(x) (decode of the encoder mean), within tolerance.
+    x_rec, inv_logdet = m.inv(z)
+    assert x_rec.shape == (10, AMBIENT)
+    assert inv_logdet.shape == (10,)
+    assert torch.allclose(x_rec, m.project(x), atol=1e-5)
+
+    # get_config is minimal and well-formed.
+    cfg = m.get_config()
+    assert cfg["type"] == "vae"
+    assert cfg["intrinsic_dim"] == m.intrinsic_dim
+    assert cfg["ambient_dim"] == AMBIENT
+
+    # ManifoldFeaturizer(manifold, n_features=AMBIENT) constructs; composing
+    # with a trivial identity Featurizer yields a working forward/inverse where
+    # the inverse maps intrinsic grid points -> ambient of dim AMBIENT.
+    manifold_feat = ManifoldFeaturizer(m, n_features=AMBIENT)
+    composed = Featurizer(id="identity") >> manifold_feat
+    feat_z, errors = composed.featurize(x)
+    assert feat_z.shape == (10, m.intrinsic_dim)
+
+    # Intrinsic grid points -> ambient via the manifold inverse module.
+    grid = m.make_steering_grid(n_points_per_dim=5)
+    ambient = manifold_feat.inverse_featurizer(grid, None)
+    assert ambient.shape == (grid.shape[0], AMBIENT)
+
+
 def test_loss_bundle_skips_zero_weight_terms():
     bundle = LossBundle(
         w_recon=1.0,

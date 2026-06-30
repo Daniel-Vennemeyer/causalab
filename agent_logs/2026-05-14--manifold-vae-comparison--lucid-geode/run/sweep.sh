@@ -33,18 +33,23 @@ echo "EXP_ROOT = ${EXP_ROOT}"
 echo "MODEL    = ${MODEL}"
 echo
 
-ARMS=(
-  weekdays_vae_aligned_flat            # Ablation 3: behavior-aligned (flat)
-  weekdays_vae_aligned_decoder_metric  # Ablation 4a: decoder-pullback metric
-  weekdays_vae_aligned_behavior_metric # Ablation 4b: behavior-pullback metric
-  weekdays_vae_aligned_atlas           # Ablation 2: atlas / multi-chart
-  weekdays_vae_aligned_s1              # Ablation 6: known S1 topology
-)
+# All 5 arms by default; override e.g. ARMS="weekdays_vae_aligned_flat" to run one.
+read -r -a ARMS <<< "${ARMS:-weekdays_vae_aligned_flat weekdays_vae_aligned_decoder_metric weekdays_vae_aligned_behavior_metric weekdays_vae_aligned_atlas weekdays_vae_aligned_s1}"
+
+# PATCH=1 re-runs each arm with patch_eval=true: re-trains the (cheap) VAE, then
+# patches its decoded steered paths into the frozen LM and scores coherence /
+# distance_from_behavior_manifold on the SAME axes as the spline. This LOADS THE
+# 8B MODEL and is the GPU-heavy path. Default off (geometry-proxy metrics only).
+PATCH_OVERRIDE=""
+if [ "${PATCH:-0}" = "1" ]; then
+  PATCH_OVERRIDE="behavior_manifold_vae.patch_eval=true"
+  echo "PATCH=1 -> patch_eval=true (loads the 8B model)"
+fi
 
 fail=0
 for arm in "${ARMS[@]}"; do
-  echo ">>> ${arm}"
-  if ./scripts/run_exp.sh --experiment-root "${EXP_ROOT}" "${arm}" model="${MODEL}" \
+  echo ">>> ${arm} ${PATCH_OVERRIDE}"
+  if ./scripts/run_exp.sh --experiment-root "${EXP_ROOT}" "${arm}" model="${MODEL}" ${PATCH_OVERRIDE:+$PATCH_OVERRIDE} \
         > "${LOG_DIR}/run_${arm}.log" 2>&1; then
     echo "    done -> ${LOG_DIR}/run_${arm}.log"
   else

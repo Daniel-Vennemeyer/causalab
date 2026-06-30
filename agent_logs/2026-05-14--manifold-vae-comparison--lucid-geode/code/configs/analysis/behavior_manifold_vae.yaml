@@ -17,6 +17,15 @@ loss_weights:
 behavior_distance: hellinger   # kl | hellinger | js
 activation_site: single_final_token
 patch_eval: false
+patch_n_prompts: 16        # base prompts per pair for patched scoring
+# MUST match the spline path_steering num_steps_along_path (50): the
+# distance_from_behavior_manifold score SUMS along the path, so a different step
+# count systematically rescales it and breaks comparability with the spline.
+patch_num_steps: 50        # steps along each patched path
+patch_max_pairs: 21        # class-centroid pairs only (weekdays: all C(7,2)=21).
+                           # Spline path_steering also adds 29 dense "extra" pairs
+                           # (50 total); the VAE patch scores the centroid subset.
+patch_batch_size: 128      # forward batch size for collect_grid_distributions
 subspace: null
 layers: null
 token_positions: [last_token]

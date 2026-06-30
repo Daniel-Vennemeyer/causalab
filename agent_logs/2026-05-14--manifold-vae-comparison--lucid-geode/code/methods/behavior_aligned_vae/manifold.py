@@ -187,6 +187,36 @@ class VAEManifold(nn.Module):
                 grids.append(sparse)
             return torch.cat(grids, dim=0)
 
+    # ----- flow-compatible fwd / inv (for ManifoldFeaturizer) -----------------
+    def fwd(self, x: Tensor) -> Tuple[Tensor, Tensor]:
+        """Flow-compatible forward: ambient x -> (z, logdet).
+
+        ``z`` is the intrinsic coordinate (B, intrinsic_dim) from the encoder
+        mean; ``encode`` already handles internal standardization. Mirrors
+        ``SplineManifold.fwd`` so this manifold is a drop-in for
+        ``ManifoldFeaturizer``. The logdet is a zero placeholder (the VAE encode
+        is not a volume-preserving bijection; downstream consumers ignore it).
+        """
+        u, _ = self.encode(x)
+        return u, x.new_zeros(x.shape[0])
+
+    def inv(self, z: Tensor) -> Tuple[Tensor, Tensor]:
+        """Flow-compatible inverse: intrinsic z -> (x, logdet).
+
+        Accepts intrinsic-dim grid points (only the first ``intrinsic_dim``
+        columns are used); ``decode`` un-standardizes to ambient PCA space.
+        """
+        u = z[:, : self.intrinsic_dim]
+        return self.decode(u), z.new_zeros(z.shape[0])
+
+    def get_config(self) -> Dict[str, Any]:
+        """Minimal config for ``ManifoldFeaturizer.to_dict``."""
+        return {
+            "type": "vae",
+            "intrinsic_dim": self.intrinsic_dim,
+            "ambient_dim": self.ambient_dim,
+        }
+
     def forward(self, x: Tensor) -> Tensor:
         return self.project(x)
 
