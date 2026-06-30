@@ -31,5 +31,14 @@ activation_manifold:
 
 path_steering:
   n_extra_pairs: 29
+  # GPU-util / throughput: path interventions are batch-size bound (an 8B model
+  # over short weekday prompts barely loads the GPU at batch 32). 128 cuts the
+  # batch count ~4x with identical results. Bump to 256 if the GPU has headroom,
+  # or lower if you OOM.
+  batch_size: 128
   isometry:
     n_interior_per_pair: 4
+  # --- optional debug-speed knobs (uncomment to trade statistical power for
+  # wall-clock on a smoke pass; both reduce the number of forward passes) ---
+  # num_steps_along_path: 25   # default 50
+  # n_prompts: 8               # default 16
