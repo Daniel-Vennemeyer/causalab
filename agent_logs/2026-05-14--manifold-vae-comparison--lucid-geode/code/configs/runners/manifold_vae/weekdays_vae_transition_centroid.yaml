@@ -1,0 +1,39 @@
+# @package _global_
+# The one that matters: push the DISCOVERED (behavior-transition) arm — which at
+# 0.806 lost to linear interpolation (0.887) — above the linear bar by optimizing
+# centroid-level isometry + compactness and decoupling reconstruction. Same
+# behavior-derived d_y (precomputed transition graph); NO topology injected.
+defaults:
+  - /base
+  - /task: natural_domains_arithmetic_weekdays
+  - /model: llama31_8b
+  - /analysis/behavior_manifold_vae
+  - _self_
+
+task:
+  target_variable: result
+
+behavior_manifold_vae:
+  method: flat_vae
+  topology: unstructured
+  metric: latent_linear
+  latent_dim: 2
+  n_charts: 1
+  layers: [28]
+  token_positions: [last_token]
+  behavior_geometry: precomputed
+  transition_variable: number
+  contrastive_margin: 1.0
+  loss_weights:
+    w_recon: 0.2
+    w_kl: 0.01
+    w_behavior: 0.0
+    w_isometry: 2.0
+    w_geodesic: 0.0
+    w_patch: 0.0
+    w_contrastive: 2.0
+    w_centroid_iso: 5.0
+    w_compactness: 1.0
+  patch_eval: false
+  device: cpu
+  arm_label: transition_centroid

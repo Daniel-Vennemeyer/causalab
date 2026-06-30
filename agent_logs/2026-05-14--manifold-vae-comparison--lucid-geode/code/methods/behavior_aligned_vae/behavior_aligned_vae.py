@@ -149,6 +149,8 @@ def train_behavior_aligned_vae(
     w_behavior = loss_weights["w_behavior"]
     w_patch = loss_weights["w_patch"]
     w_contrastive = loss_weights.get("w_contrastive", 0.0)
+    w_centroid_iso = loss_weights.get("w_centroid_iso", 0.0)
+    w_compactness = loss_weights.get("w_compactness", 0.0)
     needs_behavior = (
         w_behavior != 0.0 or w_patch != 0.0 or behavior_targets is not None
     )
@@ -168,6 +170,8 @@ def train_behavior_aligned_vae(
         w_geodesic=loss_weights["w_geodesic"],
         w_patch=w_patch,
         w_contrastive=w_contrastive,
+        w_centroid_iso=w_centroid_iso,
+        w_compactness=w_compactness,
         behavior_distance=behavior_distance,
     )
 

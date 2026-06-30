@@ -1,0 +1,39 @@
+# @package _global_
+# Improve on the cyclic arm (0.936) toward the spline (0.990): optimize isometry
+# at the CENTROID level (the quantity the metric measures) + within-class
+# compactness, and DECOUPLE reconstruction from geometry (low w_recon) so the 2-D
+# latent isn't split between recon and geometry. Injected (cyclic) d_y.
+defaults:
+  - /base
+  - /task: natural_domains_arithmetic_weekdays
+  - /model: llama31_8b
+  - /analysis/behavior_manifold_vae
+  - _self_
+
+task:
+  target_variable: result
+
+behavior_manifold_vae:
+  method: flat_vae
+  topology: unstructured
+  metric: latent_linear
+  latent_dim: 2
+  n_charts: 1
+  layers: [28]
+  token_positions: [last_token]
+  behavior_geometry: cyclic
+  behavior_period: 7
+  contrastive_margin: 1.0
+  loss_weights:
+    w_recon: 0.2          # decoupled: geometry dominates the 2-D latent
+    w_kl: 0.01
+    w_behavior: 0.0
+    w_isometry: 2.0       # per-example isometry (kept, lighter)
+    w_geodesic: 0.0
+    w_patch: 0.0
+    w_contrastive: 2.0
+    w_centroid_iso: 5.0   # NEW: centroid-level isometry (optimizes the eval metric)
+    w_compactness: 1.0    # NEW: tight per-class clusters
+  patch_eval: false
+  device: cpu
+  arm_label: cyclic_centroid

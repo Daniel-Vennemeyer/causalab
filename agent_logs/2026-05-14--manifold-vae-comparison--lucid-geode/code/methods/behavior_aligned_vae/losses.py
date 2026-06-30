@@ -91,6 +91,8 @@ class LossBundle:
         w_geodesic: float,
         w_patch: float,
         w_contrastive: float,
+        w_centroid_iso: float,
+        w_compactness: float,
         behavior_distance: str,
     ):
         if behavior_distance not in _VALID_BEHAVIOR_DISTANCES:
@@ -105,6 +107,8 @@ class LossBundle:
         self.w_geodesic = w_geodesic
         self.w_patch = w_patch
         self.w_contrastive = w_contrastive
+        self.w_centroid_iso = w_centroid_iso
+        self.w_compactness = w_compactness
         self.behavior_distance = behavior_distance
 
     @staticmethod
@@ -237,6 +241,60 @@ class LossBundle:
 
         n_off = off_diag.sum().clamp_min(1)
         return (pos_term + neg_term) / n_off
+
+    @staticmethod
+    def centroid_isometry_loss(
+        u: Tensor,
+        class_idx: Tensor,
+        *,
+        geometry_distance: str,
+        geometry_period: Optional[float] = None,
+        geometry_matrix: Optional[Tensor] = None,
+    ) -> Tensor:
+        """Match per-class latent-CENTROID pairwise distances to the relational
+        ``d_y``. The eval isometry is measured on per-class-centroid geodesics, so
+        this optimizes exactly that quantity (vs the per-example isometry term,
+        which is a noisier proxy). Only meaningful for a relational geometry
+        (cyclic / ordinal / precomputed)."""
+        idx = class_idx.reshape(-1).long()
+        classes = torch.unique(idx)
+        cents = torch.stack([u[idx == c].mean(dim=0) for c in classes])  # (P, k)
+        du = _normalized_pdist(cents)
+        cf = classes.float()
+        if geometry_distance == "precomputed":
+            if geometry_matrix is None:
+                raise ValueError("centroid_isometry 'precomputed' needs geometry_matrix")
+            dy_raw = geometry_matrix[classes][:, classes]
+            dy = dy_raw / dy_raw.mean().clamp_min(_EPS)
+        elif geometry_distance == "cyclic":
+            if geometry_period is None:
+                raise ValueError("centroid_isometry 'cyclic' needs geometry_period")
+            dy = _cyclic_pdist(cf, geometry_period)
+        elif geometry_distance == "ordinal":
+            dy = _ordinal_pdist(cf)
+        else:
+            raise ValueError(
+                "centroid_isometry requires a relational geometry "
+                "(cyclic/ordinal/precomputed), got " + repr(geometry_distance)
+            )
+        return ((du - dy) ** 2).mean()
+
+    @staticmethod
+    def compactness_loss(u: Tensor, class_idx: Tensor) -> Tensor:
+        """Within-class scatter: mean squared distance of each example to its
+        class latent centroid. Pulls same-class points together → crisp centroids,
+        closing the per-example-vs-centroid gap."""
+        idx = class_idx.reshape(-1).long()
+        classes = torch.unique(idx)
+        terms = []
+        for c in classes:
+            m = idx == c
+            if int(m.sum()) > 1:
+                cu = u[m]
+                terms.append(((cu - cu.mean(dim=0)) ** 2).sum(dim=-1).mean())
+        if not terms:
+            return u.new_zeros(())
+        return torch.stack(terms).mean()
 
     @staticmethod
     def geodesic_loss(decoded_path: Tensor) -> Tensor:
@@ -378,6 +436,32 @@ class LossBundle:
             )
             total = total + self.w_contrastive * con
             metrics["contrastive"] = con.item()
+
+        if self.w_centroid_iso != 0.0:
+            if u is None or class_idx is None:
+                raise ValueError(
+                    "centroid_iso term enabled (w_centroid_iso != 0) but u/class_idx "
+                    "not supplied"
+                )
+            cic = self.centroid_isometry_loss(
+                u,
+                class_idx,
+                geometry_distance=geometry_distance,
+                geometry_period=geometry_period,
+                geometry_matrix=geometry_matrix,
+            )
+            total = total + self.w_centroid_iso * cic
+            metrics["centroid_iso"] = cic.item()
+
+        if self.w_compactness != 0.0:
+            if u is None or class_idx is None:
+                raise ValueError(
+                    "compactness term enabled (w_compactness != 0) but u/class_idx "
+                    "not supplied"
+                )
+            cmp = self.compactness_loss(u, class_idx)
+            total = total + self.w_compactness * cmp
+            metrics["compactness"] = cmp.item()
 
         if extra_loss is not None:
             total = total + extra_loss

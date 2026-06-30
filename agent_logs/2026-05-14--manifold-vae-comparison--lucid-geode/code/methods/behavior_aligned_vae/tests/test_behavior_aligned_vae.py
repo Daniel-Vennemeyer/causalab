@@ -318,6 +318,8 @@ def test_loss_bundle_terms():
         w_geodesic=0.2,
         w_patch=0.4,
         w_contrastive=0.0,
+        w_centroid_iso=0.0,
+        w_compactness=0.0,
         behavior_distance="js",
     )
     b, c, k = 12, N_BEHAVIOR, LATENT
@@ -419,6 +421,8 @@ def test_loss_bundle_skips_zero_weight_terms():
         w_geodesic=0.0,
         w_patch=0.0,
         w_contrastive=0.0,
+        w_centroid_iso=0.0,
+        w_compactness=0.0,
         behavior_distance="kl",
     )
     b = 5
@@ -574,6 +578,7 @@ def test_isometry_activation_mode_label_free():
     lb = LossBundle(
         w_recon=1.0, w_kl=0.0, w_behavior=0.0, w_isometry=1.0,
         w_geodesic=0.0, w_patch=0.0, w_contrastive=0.0,
+        w_centroid_iso=0.0, w_compactness=0.0,
         behavior_distance="hellinger",
     )
     torch.manual_seed(0)
@@ -823,3 +828,68 @@ def test_train_precomputed_geometry_smoke():
     assert "contrastive" in fm and math.isfinite(fm["contrastive"])
     for ep in out["history"]:
         assert math.isfinite(ep["total"])
+
+
+def test_centroid_isometry_and_compactness():
+    """centroid_isometry is LOWER when class centroids are arranged in the correct
+    cyclic order than when scrambled (it rewards behavior-aligned centroid
+    geometry). compactness is ~0 with no within-class scatter and grows with it.
+    (Note: the loss does not reach 0 even for a perfect circle — du is the
+    Euclidean chord while d_y is the cyclic index distance; they correlate, which
+    is what the eval Pearson metric rewards, but are not equal.)"""
+    torch.manual_seed(0)
+    W = 7
+    ang = torch.tensor([2 * math.pi * c / W for c in range(W)])
+    circle = torch.stack([torch.cos(ang), torch.sin(ang)], dim=1)  # (W,2)
+    cls = torch.arange(W).repeat_interleave(3)
+
+    u_ordered = circle[cls]  # class c at angle 2*pi*c/W  → cyclic order on the ring
+    perm = torch.tensor([0, 3, 1, 5, 2, 6, 4])  # scrambled placement on the ring
+    u_scrambled = circle[perm][cls]
+
+    iso_ordered = LossBundle.centroid_isometry_loss(
+        u_ordered, cls, geometry_distance="cyclic", geometry_period=float(W)
+    )
+    iso_scrambled = LossBundle.centroid_isometry_loss(
+        u_scrambled, cls, geometry_distance="cyclic", geometry_period=float(W)
+    )
+    assert torch.isfinite(iso_ordered)
+    assert float(iso_ordered) < float(iso_scrambled)  # correct order scores better
+
+    comp0 = LossBundle.compactness_loss(u_ordered, cls)
+    assert float(comp0) < 1e-8  # no within-class scatter
+    comp1 = LossBundle.compactness_loss(u_ordered + 0.5 * torch.randn_like(u_ordered), cls)
+    assert float(comp1) > float(comp0)
+
+    # precomputed path: cyclic graph-distance matrix → same ordering preference.
+    M = torch.tensor([[min(abs(i - j), W - abs(i - j)) for j in range(W)]
+                      for i in range(W)], dtype=torch.float32)
+    iso_pc_ordered = LossBundle.centroid_isometry_loss(
+        u_ordered, cls, geometry_distance="precomputed", geometry_matrix=M
+    )
+    iso_pc_scrambled = LossBundle.centroid_isometry_loss(
+        u_scrambled, cls, geometry_distance="precomputed", geometry_matrix=M
+    )
+    assert torch.isfinite(iso_pc_ordered)
+    assert float(iso_pc_ordered) < float(iso_pc_scrambled)
+
+
+def test_train_with_centroid_iso_and_compactness():
+    """train_behavior_aligned_vae runs with the new centroid-iso + compactness
+    terms (cyclic geometry) and reports them in final_metrics."""
+    torch.manual_seed(0)
+    feats = torch.randn(60, 12)
+    cls = torch.arange(6).repeat(10).float()  # 6 classes, geometry coords
+    res = train_behavior_aligned_vae(
+        feats, behavior_targets=None, method="flat_vae", latent_dim=2,
+        hidden_dims=[32, 32], topology="unstructured", n_charts=1,
+        behavior_hidden_dims=[16], n_behavior=6,
+        loss_weights=dict(w_recon=0.2, w_kl=0.01, w_behavior=0.0, w_isometry=2.0,
+                          w_geodesic=0.0, w_patch=0.0, w_contrastive=2.0,
+                          w_centroid_iso=5.0, w_compactness=1.0),
+        behavior_distance="hellinger", lr=1e-3, epochs=3, batch_size=64,
+        kl_warmup_epochs=1, device="cpu", seed=0,
+        geometry_coords=cls, geometry_distance="cyclic", geometry_period=6.0,
+    )
+    fm = res["final_metrics"]
+    assert math.isfinite(fm["centroid_iso"]) and math.isfinite(fm["compactness"])
