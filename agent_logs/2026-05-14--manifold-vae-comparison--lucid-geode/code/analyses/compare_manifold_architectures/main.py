@@ -125,22 +125,29 @@ def _collect_vae_arms(root: str) -> list[dict[str, Any]]:
     return rows
 
 
-def _first_metrics_json(base: str, prefixes: tuple[str, ...]) -> dict[str, Any] | None:
-    """Find the first ``metrics.json`` under any subdir of ``base`` whose name
-    starts with one of ``prefixes`` (searched recursively, defensively)."""
+def _first_metrics_json(
+    base: str, prefixes: tuple[str, ...], prefer_mode: str = "geometric"
+) -> dict[str, Any] | None:
+    """Find a ``metrics.json`` anywhere under ``base`` whose path contains a
+    directory component starting with one of ``prefixes``.
+
+    path_steering nests criteria deeply, e.g.
+    ``path_steering/<ss>/L<layer>_<pos>/<spline_sub>/<tv>/criteria/isometry/geometric/metrics.json``
+    so we glob recursively and match on any path component (not just direct
+    subdirs of ``base``). When multiple match, prefer the ``prefer_mode`` path
+    (the manifold-geodesic result is the representative spline number)."""
     if not os.path.isdir(base):
         return None
-    for name in sorted(os.listdir(base)):
-        if not name.startswith(prefixes):
-            continue
-        sub = os.path.join(base, name)
-        if not os.path.isdir(sub):
-            continue
-        for cand in glob.glob(os.path.join(sub, "**", "metrics.json"), recursive=True):
-            data = _read_json(cand)
-            if data is not None:
-                return data
-    return None
+    matched = [
+        cand
+        for cand in glob.glob(os.path.join(base, "**", "metrics.json"), recursive=True)
+        if any(part.startswith(prefixes) for part in cand.split(os.sep))
+    ]
+    if not matched:
+        return None
+    preferred = [c for c in matched if prefer_mode in c.split(os.sep)]
+    pick = preferred[0] if preferred else sorted(matched)[0]
+    return _read_json(pick)
 
 
 def _collect_spline_baseline(root: str) -> dict[str, Any] | None:
