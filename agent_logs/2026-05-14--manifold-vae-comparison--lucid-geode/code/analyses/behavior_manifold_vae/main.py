@@ -647,19 +647,32 @@ def main(cfg: DictConfig) -> dict[str, Any]:
     final_metrics = result["final_metrics"]
 
     # --- Output directory ----------------------------------------------------
-    # Encode loss_set in the path so a recon-only and a behavior-aligned arm with
-    # otherwise-identical descriptors (method/topology/metric/charts/seed) do not
-    # write to the same directory and clobber each other.
+    # Encode loss_set AND an arm_label in the path. Several arms share the same
+    # (method, topology, metric, charts, loss_set) tuple but differ in geometry /
+    # contrastive / train_on_centroids / loss weights (e.g. aligned_flat vs strong
+    # vs cyclic vs centroid_upper) — without a distinguishing label they collide
+    # on disk and overwrite each other. arm_label (set per runner config) makes
+    # each arm's output dir unique; falls back to a composite of the
+    # distinguishing knobs if not set.
     _lw = analysis.loss_weights
     _loss_set = (
         "behavior_aligned"
         if (float(_lw.get("w_behavior", 0.0)) > 0.0 or float(_lw.get("w_isometry", 0.0)) > 0.0)
         else "recon_only"
     )
+    arm_label = analysis.get("arm_label", None)
+    if not arm_label:
+        _parts = [f"geo-{analysis.behavior_geometry}"]
+        if analysis.get("train_on_centroids", False):
+            _parts.append("cen")
+        _wc = float(_lw.get("w_contrastive", 0.0))
+        if _wc:
+            _parts.append(f"con{_wc:g}")
+        arm_label = "_".join(_parts)
     arm_sub = (
         f"{analysis.method}_topo-{analysis.topology}"
         f"_metric-{analysis.metric}_charts{analysis.n_charts}"
-        f"_loss-{_loss_set}_seed{cfg.seed}"
+        f"_loss-{_loss_set}_{arm_label}_seed{cfg.seed}"
     )
     out_dir = os.path.join(
         root, "behavior_manifold_vae", ss_sub, f"L{layer}_{token_position}", arm_sub
@@ -952,6 +965,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
     architecture = arch_map.get(analysis.method, analysis.method)
     comparison_ready = {
         "architecture": architecture,
+        "arm_label": arm_label,
         "task": cfg.task.name,
         "topology": analysis.topology,
         "n_charts": analysis.n_charts,
