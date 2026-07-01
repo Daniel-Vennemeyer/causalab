@@ -156,9 +156,15 @@ done | xargs -P "${JOBS}" -L1 bash -c 'run_one "$@"' _
 
 echo
 echo ">>> compare_architectures"
-./scripts/run_exp.sh --experiment-root "${EXP_ROOT}" compare_architectures model="${MODEL}" \
-    > "${LOG_DIR}/run_compare_architectures.log" 2>&1
-echo "    done -> ${LOG_DIR}/run_compare_architectures.log"
+# CRITICAL: pass the matching task. The framework appends ${task.variant} to
+# experiment_root, and the compare runner defaults to the weekdays task — so
+# without this override compare aggregates .../llama31_8b/weekdays/ while the
+# arms live under .../llama31_8b/<this-domain>/ -> "no arms found", empty summary.
+# TASK_DIRNAME is exactly the task config name (natural_domains_arithmetic_<d>).
+./scripts/run_exp.sh --experiment-root "${EXP_ROOT}" compare_architectures \
+    model="${MODEL}" task="${TASK_DIRNAME}" \
+    > "${LOG_DIR}/run_compare_${TASK_DIRNAME}.log" 2>&1
+echo "    done -> ${LOG_DIR}/run_compare_${TASK_DIRNAME}.log"
 
 echo
 echo "===== summary_by_arm.csv (mean±std across seeds) ====="
