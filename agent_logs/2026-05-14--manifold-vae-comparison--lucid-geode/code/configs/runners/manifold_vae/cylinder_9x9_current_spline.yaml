@@ -25,6 +25,7 @@ baseline:
 
 subspace:
   layers: [28]
+  token_positions: [last]   # graph_walk names its position 'last' (not 'last_token')
   batch_size: 4
 
 activation_manifold:
