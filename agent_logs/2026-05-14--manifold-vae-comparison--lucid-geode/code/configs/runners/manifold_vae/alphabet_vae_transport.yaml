@@ -35,7 +35,9 @@ behavior_manifold_vae:
   # former; its noisy graph is itself a finding about discovery quality.
   transport_use_ground_truth_coord: true
   transport_neighbor_radius: 1
-  transport_w_density: 0.0
+  # w_density penalizes off-data transport steps. First run (0.0) drifted off-manifold
+  # over multi-step integration (dist 1.45 vs spline 0.219); 1.0 fights that drift.
+  transport_w_density: 1.0
   patch_eval: true
   device: cpu
   arm_label: transport

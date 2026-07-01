@@ -103,7 +103,19 @@ The VAE recovers the correct behavioral geometry — a ring for cyclic domains, 
 
 - **Transition-graph denoising (`edge_min_frac=0.34`) is a validated win.** `transition_adaptive` is the best VAE arm (0.338, closest to the spline's 0.192) and far more *stable* (±0.05 vs manifold's ±0.21) — a cleaner discovered `d_y` both lowers and de-noises steering.
 - **A 1-D topology prior (`s1`) is REFUTED.** Forcing an angular 1-D latent made *both* discovery (iso 0.84→0.54) and steering (0.43→**1.70**, worst arm) far worse. Reason: a 1-D *latent* path is ordered, but its **decoded 64-D image is not automatically on the activation manifold** — the decoder still drifts off-data, and dropping `w_manifold` (mistakenly reasoned as unnecessary for a 1-D path) removed the only control on decoder faithfulness. The 2-D unstructured latent captures the ring *better* than an imposed circle; `w_manifold`, not the topology prior, is the lever.
-- **Implication:** the residual VAE↔spline gap is decoder faithfulness, not latent dimensionality. The topology prior can't fix it because it still *has a decoder*. This is the direct motivation for the **transport** method (a decoder-free tangent field), which is implemented but not yet run.
+- **Implication:** the residual VAE↔spline gap is decoder faithfulness, not latent dimensionality. The topology prior can't fix it because it still *has a decoder*. This motivated the **transport** method (a decoder-free tangent field).
+
+### Transport (decoder-free tangent field) — first result: underperforms (drift)
+
+A learned tangent field `v_θ(h)`, steered by integrating from real centroids (no decoder, no parametric manifold). First run, **alphabet, ground-truth coordinate** (isolating the mechanism from discovery noise; `w_density=0`, 3 seeds):
+
+| alphabet arm | isometry | distance ↓ |
+|---|---|---|
+| spline geometric | 0.9995 | **0.219** |
+| transition_centroid (VAE decoder) | 0.73 | 0.71 |
+| **transport (gt coord)** | 0.48 | **1.45** |
+
+**Transport underperformed the VAE decoder (1.45 vs 0.71) — a negative result.** Cause: the field is trained real→real on adjacent classes, so `v_θ(h)` is reliable only *at* real activations; integrating ~25 steps enters *synthetic* intermediate `h` where it extrapolates, and per-step errors compound → the trajectory drifts off-manifold (isometry 0.48). This is the **same off-manifold failure as the decoder, relocated** from "decode an arbitrary point" to "integrate through untrained space" — removing the decoder did not remove the problem. Open follow-ups: (1) weekdays transport (discovered clean cycle) still pending; (2) `w_density>0` retry to fight drift. If neither recovers it, the pure local-field approach needs either snap-to-data or a global manifold structure — undermining its "no manifold" appeal, and pointing back to the spline/atlas as the object that avoids drift by construction.
 
 ### TWO reference-manifold bugs on non-cyclic domains (both found + fixed)
 
