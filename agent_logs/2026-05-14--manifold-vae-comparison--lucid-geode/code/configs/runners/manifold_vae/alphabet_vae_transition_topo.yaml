@@ -1,0 +1,46 @@
+# @package _global_
+# Close the VAE-vs-spline gap via a 1-D topology prior derived from the DISCOVERED
+# graph. On alphabet the transition graph is a LINE, so we fit the VAE on a 1-D
+# `interval` latent (topology adapter: intrinsic_dim=1, bounded tanh) instead of a
+# 2-D `unstructured` latent. The transition d_y (discovered |i-j| distances) forces
+# the encoder to place classes IN ORDER along that 1-D coordinate, and latent_linear
+# steering then traces the ordered curve exactly -- i.e. the paper's manifold steering
+# (App. A.3) but with a DISCOVERED coordinate, not the ground-truth ordinal.
+# Hypothesis: closes the gap to the spline geodesic (0.71 -> toward 0.219).
+# No w_manifold (a 1-D ordered path is already on-manifold; the pull only adds noise).
+defaults:
+  - /base
+  - /task: natural_domains_arithmetic_alphabet
+  - /model: llama31_8b
+  - /analysis/behavior_manifold_vae
+  - _self_
+
+task:
+  target_variable: result
+
+behavior_manifold_vae:
+  method: flat_vae
+  topology: interval        # 1-D bounded latent (line) -- from discovered topology
+  metric: latent_linear
+  latent_dim: 1
+  n_charts: 1
+  layers: [28]
+  token_positions: [last_token]
+  behavior_geometry: precomputed
+  transition_variable: number
+  transition_edge_min_frac: 0.34
+  contrastive_margin: 1.0
+  loss_weights:
+    w_recon: 0.2
+    w_kl: 0.01
+    w_behavior: 0.0
+    w_isometry: 2.0
+    w_geodesic: 0.0
+    w_patch: 0.0
+    w_contrastive: 2.0
+    w_centroid_iso: 5.0
+    w_compactness: 1.0
+    w_manifold: 0.0        # 1-D ordered latent is already on-manifold
+  patch_eval: true
+  device: cpu
+  arm_label: transition_topo

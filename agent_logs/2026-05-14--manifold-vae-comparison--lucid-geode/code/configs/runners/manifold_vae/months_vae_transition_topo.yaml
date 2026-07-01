@@ -1,0 +1,45 @@
+# @package _global_
+# Close the VAE-vs-spline gap via a 1-D topology prior derived from the DISCOVERED
+# graph. On months the transition graph is a CYCLE, so we fit the VAE on a 1-D `s1`
+# latent (topology adapter: intrinsic_dim=1 angle, embed cos/sin) instead of a 2-D
+# `unstructured` latent. The transition d_y (discovered cyclic distances) orders the
+# classes around the circle, and latent_linear steering uses the periodic
+# shortest-arc -- i.e. manifold steering along the discovered ring (paper parity,
+# unsupervised). Hypothesis: closes the gap to the spline geodesic (0.43 -> toward
+# 0.19). No w_manifold (the 1-D arc path is already on-manifold).
+defaults:
+  - /base
+  - /task: natural_domains_arithmetic_months
+  - /model: llama31_8b
+  - /analysis/behavior_manifold_vae
+  - _self_
+
+task:
+  target_variable: result
+
+behavior_manifold_vae:
+  method: flat_vae
+  topology: s1              # 1-D angular latent (cycle) -- from discovered topology
+  metric: latent_linear
+  latent_dim: 1
+  n_charts: 1
+  layers: [28]
+  token_positions: [last_token]
+  behavior_geometry: precomputed
+  transition_variable: number
+  transition_edge_min_frac: 0.34
+  contrastive_margin: 1.0
+  loss_weights:
+    w_recon: 0.2
+    w_kl: 0.01
+    w_behavior: 0.0
+    w_isometry: 2.0
+    w_geodesic: 0.0
+    w_patch: 0.0
+    w_contrastive: 2.0
+    w_centroid_iso: 5.0
+    w_compactness: 1.0
+    w_manifold: 0.0        # 1-D arc path is already on-manifold
+  patch_eval: true
+  device: cpu
+  arm_label: transition_topo
