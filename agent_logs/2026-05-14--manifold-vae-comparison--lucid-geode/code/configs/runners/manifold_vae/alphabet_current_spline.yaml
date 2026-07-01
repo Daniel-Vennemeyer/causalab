@@ -24,6 +24,16 @@ subspace:
 
 activation_manifold:
   layers: [28]
+  # SEQUENTIAL-task fix (matches the paper): fit the ACTIVATION manifold on the
+  # ordinal-index intrinsic coordinate (embeddings['result']), NOT the top-1 PCA
+  # axis. PCA mode logs "No periodic pairs — using top 1 PCA components" for a
+  # line, and the top-1 PCA axis scrambles letter order when the activation curve
+  # folds -> our alphabet spline isometry collapsed to 0.058 and its geodesic lost
+  # to linear (1.22 > 0.94), inverting the paper's letters result (iso 0.999,
+  # geodesic 2.42 << linear 6.95). Parameter mode uses the ordinal coordinate the
+  # paper uses for sequential tasks. (Cyclic weekdays/months keep PCA atan2, which
+  # is already the paper's cyclic coordinate — no change there.)
+  intrinsic_mode: parameter
 
 # CRITICAL for non-cyclic domains: fit the BELIEF manifold from the task's DECLARED
 # parametrization (causal_model.periods), NOT the PCA-geometry heuristic. The pca
