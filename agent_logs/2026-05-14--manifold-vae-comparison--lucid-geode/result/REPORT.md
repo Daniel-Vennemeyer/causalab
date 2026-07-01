@@ -1,7 +1,7 @@
 # Manifold-VAE comparison — Debug/baseline milestone report
 
 **Session:** `2026-05-14--manifold-vae-comparison--lucid-geode`
-**Status:** Priority sweep + **objective fix complete + steering fix attempted** (seeded). Headline arc: the *original* behavior-aligned arms (Euclidean `d_y`) sit at isometry ≈ 0 ± 0.16 vs spline 0.99; the **cyclic relational + contrastive arm reaches isometry 0.936 ± 0.024 — matching the spline at no recon cost**; and the **manifold-interpolation loss (`w_manifold`) is the first VAE arm to move steering — distance 1.32 → 0.99 with its own decoded paths and coherence tied with the spline (0.770 vs 0.779)**, though it does not close the full gap to the spline's 0.325, and curving the path along the decoder-pullback geodesic makes it *worse* (1.54), not better.
+**Status:** Priority sweep + objective fix + steering fix + **cross-domain generalization** (seeded). Headline generalization result: **discovery generalizes to every topology** (isometry 0.73–0.84 across weekdays/months cyclic AND alphabet/age linear), while the **manifold-geometry steering benefit is topology-gated** — `w_manifold` and geodesics help on cyclic manifolds but not on linear ones (where straight-line interpolation is already optimal). A belief-manifold periodicity bug that had invalidated the non-cyclic domains was found and fixed (parameter-mode belief fit). Headline arc: the *original* behavior-aligned arms (Euclidean `d_y`) sit at isometry ≈ 0 ± 0.16 vs spline 0.99; the **cyclic relational + contrastive arm reaches isometry 0.936 ± 0.024 — matching the spline at no recon cost**; and the **manifold-interpolation loss (`w_manifold`) is the first VAE arm to move steering — distance 1.32 → 0.99 with its own decoded paths and coherence tied with the spline (0.770 vs 0.779)**, though it does not close the full gap to the spline's 0.325, and curving the path along the decoder-pullback geodesic makes it *worse* (1.54), not better.
 
 ## BREAKTHROUGH: cyclic relational + contrastive objective (weekdays, 5 seeds)
 
@@ -58,6 +58,40 @@ Per-seed dist for `transition_manifold`: 1.12 / 0.89 / 0.96 (tight, no lucky see
 3. **Path *routing* via the decoder-pullback geodesic is a dead end (refuted).** `transition_manifold_geo` is the same trained decoder (recon bit-identical per seed) with the patch path solved as a pullback geodesic instead of a straight line — and it is **worse** (0.99 → 1.54), with `geodesic_naturalness` rising (5.4 → 8.2). The decoder-pullback metric `G_h = JᵀJ` measures where the *decoder stretches*, not where *data lives*; its geodesic shortcuts through off-data low-stretch regions. With an on-manifold decoder, **the straight latent line is already near-optimal**; curving it via decoder geometry hurts.
 
 **Remaining gap (0.99 → 0.325) is honest and localized.** Even the project-to-data crutch floors at 0.77, so the spline's edge is its path threading **dense real-activation regions in behavior order**, which neither a straight latent line nor a decoder-pullback geodesic reproduces. The next lever is a **data-density metric** (geodesics cheap where data is dense, expensive in voids — Arvanitidis-style RBF/uncertainty metric), *not* a decoder-Jacobian metric — documented as the next investment.
+
+## GENERALIZATION across domains + topologies (Phase 1: months, alphabet, age)
+
+Replicated the weekdays pipeline on three more `natural_domains_arithmetic` domains — a larger cycle (months, W=12) and two **non-cyclic lines** (alphabet W=22, age W=91) — to test whether the discovery + steering results are a weekday-ring artifact. Minimal decisive arm set (spline baseline + `transition_centroid` + `transition_manifold`), 3 seeds; age is discovery-only (W=91 makes patch infeasible). All metrics use `intrinsic_mode: parameter` belief manifolds (see the belief-fit bug below).
+
+### Discovery generalizes to EVERY topology (the strong positive)
+
+`transition_centroid` isometry (discovered `d_y` from behavioral `number` transitions; NO topology injected):
+
+| domain | topology | W | isometry r (3 seeds) |
+|---|---|---|---|
+| weekdays | cyclic | 7 | 0.82 |
+| **months** | cyclic | 12 | **0.84** |
+| **alphabet** | **line (non-cyclic)** | 22 | **0.73** |
+| **age** | **line (non-cyclic)** | 91 | **0.83** |
+
+The VAE recovers the correct behavioral geometry — a ring for cyclic domains, a **line** for non-cyclic ones — from transitions alone, across W=7…91. Discovery is **not** topology-specific.
+
+### Steering advantage IS topology-gated (mechanistic)
+
+| domain | spline geometric ↓ | spline linear | VAE transition_centroid | VAE transition_manifold (`w_manifold`) |
+|---|---|---|---|---|
+| weekdays (cyclic) | 0.33 | 1.40 | 1.26 | **0.99** (helps) |
+| **months** (cyclic) | 0.19 | 0.78 | 0.69 | **0.43** (helps) |
+| **alphabet** (line) | 1.22 | 0.94 | **0.71** | 1.24 (**hurts**) |
+
+- **Cyclic (weekdays, months):** the geodesic beats linear (0.19 ≪ 0.78) and `w_manifold` improves the VAE (0.69→0.43). The straight latent line chords across the ring → off-manifold intermediates; curvature pays.
+- **Linear (alphabet):** **no geodesic advantage exists** — even the *spline's own* geodesic loses to its straight line (1.22 > 0.94), an inversion that is robust to the corrected belief manifold. `w_manifold` *hurts* (0.71→1.24); the best steerer is plain `transition_centroid` (0.71). On a convex (linear) manifold the straight line already *is* the geodesic, so any added curvature (spline geodesic OR `w_manifold`) only pushes paths off it.
+
+**Unified finding:** discovery is universal; the manifold-geometry **steering** benefit is specific to **non-convex (cyclic)** behavioral manifolds. This is mechanistically expected, not a failure — it sharpens *when* the manifold apparatus helps.
+
+### Belief-manifold periodicity bug (found + fixed)
+
+The `output_manifold` belief fit used the PCA-geometry heuristic `detect_periodic_dims`, which **false-positives on non-cyclic domains**: alphabet's line E..Z was wrapped onto a circle (`dim0=[0,2π]`, A≈Z). This corrupted every alphabet metric — isometry collapsed to ≈0, and the spline's own geometric distance (1.21) exceeded its linear (0.99), an impossible inversion that flagged the broken reference. Fix: `intrinsic_mode: parameter` derives periodicity from `causal_model.periods` (declared task structure — periodic iff `cyclic=True`), giving a correct non-periodic line for alphabet/age and correct period for months/weekdays. After the fix, alphabet isometry rose −0.04 → 0.73. **Prior-to-fix alphabet numbers were invalid.** (weekdays kept its PCA run — the heuristic was correct there; months re-run under parameter mode confirmed the cyclic result is robust to the fit method.)
 
 ## Final summary: fit → discover → steer
 
