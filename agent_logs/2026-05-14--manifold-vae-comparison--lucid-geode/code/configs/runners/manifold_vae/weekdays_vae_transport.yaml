@@ -1,0 +1,32 @@
+# @package _global_
+# Local behavioral transport on weekdays (ring). No VAE, no decoder, no parametric
+# manifold: learn a tangent field v(h) and integrate it from real centroids along
+# the DISCOVERED cycle (periodic shortest-arc). Decisive test: does transport match
+# the spline geodesic (0.33) using only real-activation-grounded steps? Compare vs
+# spline geometric + the VAE transition arms.
+defaults:
+  - /base
+  - /task: natural_domains_arithmetic_weekdays
+  - /model: llama31_8b
+  - /analysis/behavior_manifold_vae
+  - _self_
+
+task:
+  target_variable: result
+
+behavior_manifold_vae:
+  method: transport
+  topology: unstructured
+  metric: latent_linear
+  latent_dim: 1
+  n_charts: 1
+  layers: [28]
+  token_positions: [last_token]
+  behavior_geometry: precomputed
+  transition_variable: number
+  transition_edge_min_frac: 0.34
+  transport_neighbor_radius: 1
+  transport_w_density: 0.0
+  patch_eval: true
+  device: cpu
+  arm_label: transport

@@ -836,6 +836,170 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                         )
                         loss_weights[wk] = 0.0
 
+    # ======================================================================
+    # TRANSPORT ARM: no VAE, no decoder, no parametric manifold. Learn a tangent
+    # field on activation space and steer by integrating it from real centroids.
+    # Self-contained (early return); writes comparison_ready.json under the same
+    # behavior_manifold_vae tree so compare_architectures aggregates it.
+    # ======================================================================
+    if str(analysis.method) == "transport":
+        from methods.behavioral_transport import (
+            discovered_order,
+            train_transport,
+            integrate_path,
+        )
+
+        if transition_adj is None:
+            raise ValueError("transport requires behavior_geometry=precomputed (transition graph).")
+        _ord = discovered_order(transition_adj)
+        if _ord is None:
+            raise ValueError(
+                "transport: discovered graph is not a 1-D chain (branched/2-D); "
+                "1-D transport does not apply (atlas is future work)."
+            )
+        rank, periodic = _ord
+        n_ranks = int((rank >= 0).sum())
+        present_classes = [c for c in range(W) if rank[c] >= 0 and bool((cls_idx == c).any())]
+        present_classes.sort(key=lambda c: int(rank[c]))
+        U_amb = torch.stack(
+            [features[cls_idx == c].mean(dim=0) for c in present_classes], dim=0
+        )  # (Wp, k) real per-class centroids
+        z_present = np.array([float(rank[c]) for c in present_classes])
+
+        field, tinfo = train_transport(
+            features=features,
+            cls_idx=cls_idx,
+            ranks=rank,
+            periodic=periodic,
+            W=W,
+            hidden_dims=list(analysis.hidden_dims),
+            epochs=int(analysis.epochs),
+            lr=float(analysis.lr),
+            neighbor_radius=int(analysis.get("transport_neighbor_radius", 1)),
+            w_density=float(analysis.get("transport_w_density", 0.0)),
+            seed=int(cfg.seed),
+            device=device,
+        )
+        logger.info("transport trained: %s (periodic=%s, n_ranks=%d)", tinfo, periodic, n_ranks)
+
+        def _transport_path(i: int, j: int) -> torch.Tensor:
+            return integrate_path(
+                field,
+                U_amb[i].to(device),
+                float(z_present[i]),
+                float(z_present[j]),
+                n_steps=int(analysis.patch_num_steps),
+                periodic=periodic,
+                period=float(n_ranks),
+            ).detach().cpu().float()
+
+        metrics_t: dict[str, Any] = {
+            "reconstruction": None,
+            "kl": None,
+            "behavior_distance": None,
+            "isometry_pearson_r": None,
+            "geodesic_naturalness": None,
+            "patch_consistency": None,
+            "final_transport_loss": tinfo.get("final_loss"),
+        }
+        notes_t: dict[str, str] = {}
+        extra_t: dict[str, Any] = {}
+
+        # --- isometry: transport-path arc length (D_X) vs belief geodesic (D_Y) --
+        try:
+            Wp = U_amb.shape[0]
+            if Wp >= 2:
+                ia, ja = np.triu_indices(Wp, 1)
+                D_X = np.zeros((Wp, Wp))
+                for a, b in zip(ia.tolist(), ja.tolist()):
+                    p = _transport_path(a, b)
+                    arc = float((p[1:] - p[:-1]).norm(dim=-1).sum())
+                    D_X[a, b] = D_X[b, a] = arc
+                om_root = os.path.join(root, "output_manifold")
+                bm_sub = next(
+                    (n for n in sorted(os.listdir(om_root)) if os.path.isdir(os.path.join(om_root, n))),
+                    None,
+                ) if os.path.isdir(om_root) else None
+                if bm_sub is not None:
+                    if tv:
+                        bm_sub = os.path.join(bm_sub, tv)
+                    belief_manifold, _ = load_output_manifold(root, bm_sub)
+                    bel = belief_manifold.control_points
+                    if bel.shape[0] == W:
+                        pres_t = torch.tensor(present_classes, dtype=torch.long)
+                        bp = bel[pres_t].to(torch.float32)
+                        bpd = list(getattr(belief_manifold, "periodic_dims", None) or []) or None
+                        bper = (list(belief_manifold.periods) if hasattr(belief_manifold, "periods") else []) or None
+                        D_Y = np.zeros((Wp, Wp))
+                        with torch.no_grad():
+                            bl = _decoded_path_length_batched(
+                                bp[ia], bp[ja], decode_fn=belief_manifold.decode,
+                                n_steps=int(analysis.n_arc_steps), periodic_dims=bpd, periods=bper,
+                            ) / (2.0 ** 0.5)
+                        bl = bl.cpu().numpy()
+                        D_Y[ia, ja] = bl; D_Y[ja, ia] = bl
+                        iso = compute_isometry_metrics(D_X, D_Y)
+                        metrics_t["isometry_pearson_r"] = float(iso["pearson_r"]) if iso.get("pearson_r") is not None else None
+        except Exception as exc:  # isometry is diagnostic; never fatal
+            notes_t["isometry_skipped"] = str(exc)
+
+        # --- patch-grounded steering (the decisive metric) ----------------------
+        if bool(analysis.patch_eval):
+            _run_patch_eval(
+                cfg=cfg, analysis=analysis, task=task, root=root, tv=tv,
+                layer=layer, token_position=token_position,
+                subspace_out_dir=subspace_out_dir, ss_method=ss_method, ss_meta=ss_meta,
+                manifold=None, behavior_fn=None, U=U_amb, present_classes=present_classes,
+                pdims=None, pers=None, metrics=metrics_t, notes=notes_t,
+                comparison_extra=extra_t, features=features, path_builder=_transport_path,
+            )
+
+        # --- output dir + comparison_ready (same schema/tree as the VAE arms) ----
+        arm_label_t = analysis.get("arm_label", None) or "transport"
+        arm_sub_t = (
+            f"{analysis.method}_topo-{analysis.topology}"
+            f"_metric-{analysis.metric}_charts{analysis.n_charts}"
+            f"_loss-behavior_aligned_{arm_label_t}_seed{cfg.seed}"
+        )
+        out_dir_t = os.path.join(
+            root, "behavior_manifold_vae", ss_sub, f"L{layer}_{token_position}", arm_sub_t
+        )
+        if tv:
+            out_dir_t = os.path.join(out_dir_t, tv)
+        os.makedirs(out_dir_t, exist_ok=True)
+        comparison_ready_t = {
+            "architecture": "transport",
+            "arm_label": arm_label_t,
+            "task": cfg.task.name,
+            "topology": analysis.topology,
+            "n_charts": analysis.n_charts,
+            "metric": "transport",
+            "loss_set": "behavior_aligned",
+            "layer": layer,
+            "token_position": token_position,
+            "seed": cfg.seed,
+            "reconstruction": None,
+            "kl": None,
+            "behavior_distance": None,
+            "isometry_pearson_r": metrics_t["isometry_pearson_r"],
+            "geodesic_naturalness": None,
+            "patch_consistency": metrics_t.get("patch_consistency"),
+            "behavior_geometry": behavior_geometry,
+            "discovered_topology": discovered_topology.get("kind") if discovered_topology else None,
+        }
+        comparison_ready_t.update(extra_t)
+        if notes_t:
+            metrics_t["notes"] = notes_t
+        save_json_results(metrics_t, out_dir_t, "metrics.json")
+        save_json_results(comparison_ready_t, out_dir_t, "comparison_ready.json")
+        save_json_results(
+            {"analysis": ANALYSIS_NAME, "method": "transport", "transport": tinfo,
+             "periodic": bool(periodic), "n_ranks": n_ranks},
+            out_dir_t, "metadata.json",
+        )
+        logger.info("transport arm complete: %s", out_dir_t)
+        return {"out_dir": out_dir_t, "metrics": metrics_t, "comparison_ready": comparison_ready_t}
+
     baseline_dir = os.path.join(root, "baseline")
     baseline_path = os.path.join(baseline_dir, "per_class_output_dists.safetensors")
     if os.path.exists(baseline_path):

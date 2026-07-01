@@ -1,0 +1,33 @@
+# @package _global_
+# Local behavioral transport on alphabet (line). No VAE, no decoder, no parametric
+# manifold: learn a tangent field v(h) on activation space and steer by integrating
+# it from real class centroids. Uses the DISCOVERED 1-D order (transition graph).
+# Decisive test: does real-activation-grounded transport match the spline geodesic
+# (0.219) -- the evidence the mechanism is sound before taking it to abstract traits
+# where decode/spline-fit are hopeless. Compare vs spline geometric + VAE arms.
+defaults:
+  - /base
+  - /task: natural_domains_arithmetic_alphabet
+  - /model: llama31_8b
+  - /analysis/behavior_manifold_vae
+  - _self_
+
+task:
+  target_variable: result
+
+behavior_manifold_vae:
+  method: transport
+  topology: unstructured     # unused by transport (no VAE manifold); cosmetic
+  metric: latent_linear      # unused by transport path (path_builder supplies path)
+  latent_dim: 1
+  n_charts: 1
+  layers: [28]
+  token_positions: [last_token]
+  behavior_geometry: precomputed
+  transition_variable: number
+  transition_edge_min_frac: 0.34   # denoise -> clean 1-D chain for discovered_order
+  transport_neighbor_radius: 1
+  transport_w_density: 0.0
+  patch_eval: true
+  device: cpu
+  arm_label: transport

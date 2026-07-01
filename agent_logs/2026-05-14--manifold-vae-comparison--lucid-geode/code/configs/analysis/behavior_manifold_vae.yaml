@@ -2,7 +2,12 @@
 _name_: behavior_manifold_vae
 _subdir: ${.method}_topo-${.topology}_metric-${.metric}_charts${.n_charts}
 _output_dir: ${experiment_root}/behavior_manifold_vae/${._subdir}
-method: flat_vae            # flat_vae | metric_vae | atlas_vae
+method: flat_vae            # flat_vae | metric_vae | atlas_vae | transport
+# transport (method: transport): no VAE/decoder/parametric manifold. Learn a tangent
+# field on activation space and steer by integrating it from real centroids. Uses the
+# discovered 1-D order (transition graph); requires behavior_geometry=precomputed.
+transport_neighbor_radius: 1   # connect example pairs within this many rank steps
+transport_w_density: 0.0       # optional off-data penalty on the transport step (0=off)
 latent_dim: 2
 topology: unstructured      # unstructured | s1 | interval | r2 | cylinder
 n_charts: 1
