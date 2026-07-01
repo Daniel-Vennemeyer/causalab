@@ -105,17 +105,23 @@ The VAE recovers the correct behavioral geometry — a ring for cyclic domains, 
 - **A 1-D topology prior (`s1`) is REFUTED.** Forcing an angular 1-D latent made *both* discovery (iso 0.84→0.54) and steering (0.43→**1.70**, worst arm) far worse. Reason: a 1-D *latent* path is ordered, but its **decoded 64-D image is not automatically on the activation manifold** — the decoder still drifts off-data, and dropping `w_manifold` (mistakenly reasoned as unnecessary for a 1-D path) removed the only control on decoder faithfulness. The 2-D unstructured latent captures the ring *better* than an imposed circle; `w_manifold`, not the topology prior, is the lever.
 - **Implication:** the residual VAE↔spline gap is decoder faithfulness, not latent dimensionality. The topology prior can't fix it because it still *has a decoder*. This motivated the **transport** method (a decoder-free tangent field).
 
-### Transport (decoder-free tangent field) — first result: underperforms (drift)
+### Transport (decoder-free tangent field) — works once drift is penalized
 
-A learned tangent field `v_θ(h)`, steered by integrating from real centroids (no decoder, no parametric manifold). First run, **alphabet, ground-truth coordinate** (isolating the mechanism from discovery noise; `w_density=0`, 3 seeds):
+A learned tangent field `v_θ(h)`, steered by integrating from real centroids (no decoder, no parametric manifold). Tested on **alphabet, ground-truth coordinate** (isolating the mechanism from discovery noise; 3 seeds):
 
 | alphabet arm | isometry | distance ↓ |
 |---|---|---|
 | spline geometric | 0.9995 | **0.219** |
+| **transport (gt coord, `w_density=1.0`)** | **0.818** | **0.527** |
+| transport (`w_density=0`) | 0.48 | 1.45 |
 | transition_centroid (VAE decoder) | 0.73 | 0.71 |
-| **transport (gt coord)** | 0.48 | **1.45** |
+| transition_manifold (VAE + w_manifold) | 0.67 | 1.24 |
 
-**Transport underperformed the VAE decoder (1.45 vs 0.71) — a negative result.** Cause: the field is trained real→real on adjacent classes, so `v_θ(h)` is reliable only *at* real activations; integrating ~25 steps enters *synthetic* intermediate `h` where it extrapolates, and per-step errors compound → the trajectory drifts off-manifold (isometry 0.48). This is the **same off-manifold failure as the decoder, relocated** from "decode an arbitrary point" to "integrate through untrained space" — removing the decoder did not remove the problem. Open follow-ups: (1) weekdays transport (discovered clean cycle) still pending; (2) `w_density>0` retry to fight drift. If neither recovers it, the pure local-field approach needs either snap-to-data or a global manifold structure — undermining its "no manifold" appeal, and pointing back to the spline/atlas as the object that avoids drift by construction.
+**Two-part result:**
+1. **Without an on-data penalty, transport drifts** (dist 1.45, iso 0.48). The field is trained real→real on adjacent classes, so `v_θ(h)` is reliable only *at* real activations; integrating ~25 steps enters *synthetic* intermediate `h` where it extrapolates, and per-step errors compound → off-manifold. Removing the decoder relocated the off-manifold problem rather than removing it.
+2. **With `w_density=1.0`, transport works and beats the decoder VAE** on both axes (dist 1.45→**0.527** < centroid 0.71; iso 0.48→**0.818** > 0.73) — the best non-spline arm. It doesn't reach the spline (0.219), which additionally has a *global parametric manifold* + ground-truth coordinate.
+
+**The key connection:** the fix — `w_density`, penalizing off-data steps — is a discrete form of the paper's **density geometry `G_E`** (Béthune 2025: geodesics cheap where data is dense). So "transport + on-data penalty" ≈ integrating under a density metric, and it is the **decoder-free, parametric-manifold-free** approach — exactly what generalizes to abstract traits (where a decoder and a ground-truth-coordinate spline are both unavailable). The drift result also sharpens *why* it works: on-manifold steering requires either a global manifold structure (spline) or an explicit density force (transport + `w_density`); a bare local field has neither. Open: weekdays transport (discovered clean cycle) still pending.
 
 ### TWO reference-manifold bugs on non-cyclic domains (both found + fixed)
 
