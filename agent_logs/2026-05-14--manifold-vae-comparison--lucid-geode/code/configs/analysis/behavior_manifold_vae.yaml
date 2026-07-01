@@ -8,6 +8,10 @@ method: flat_vae            # flat_vae | metric_vae | atlas_vae | transport
 # discovered 1-D order (transition graph); requires behavior_geometry=precomputed.
 transport_neighbor_radius: 1   # connect example pairs within this many rank steps
 transport_w_density: 0.0       # optional off-data penalty on the transport step (0=off)
+transport_use_ground_truth_coord: false  # use the task's ordinal (paper coord) instead of the
+                                          # discovered order — isolates the transport MECHANISM from
+                                          # discovery noise (use where the discovered graph is not a
+                                          # clean 1-D chain, e.g. alphabet's hubbed transition graph).
 latent_dim: 2
 topology: unstructured      # unstructured | s1 | interval | r2 | cylinder
 n_charts: 1

@@ -849,18 +849,42 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             integrate_path,
         )
 
-        if transition_adj is None:
-            raise ValueError("transport requires behavior_geometry=precomputed (transition graph).")
-        _ord = discovered_order(transition_adj)
-        if _ord is None:
-            raise ValueError(
-                "transport: discovered graph is not a 1-D chain (branched/2-D); "
-                "1-D transport does not apply (atlas is future work)."
-            )
-        rank, periodic = _ord
-        n_ranks = int((rank >= 0).sum())
-        present_classes = [c for c in range(W) if rank[c] >= 0 and bool((cls_idx == c).any())]
-        present_classes.sort(key=lambda c: int(rank[c]))
+        # Coordinate for transport: DISCOVERED (transition graph) by default, or the
+        # task's GROUND-TRUTH ordinal (paper's coordinate) as an upper-bound that
+        # isolates the transport MECHANISM from discovery noise. Use ground-truth
+        # only where the discovered graph is too noisy for a 1-D chain (e.g. alphabet:
+        # sparse 2-increment stepping + model errors give a hubbed, max_deg-7 graph).
+        _use_gt = bool(analysis.get("transport_use_ground_truth_coord", False))
+        _coord_source = "ground_truth" if _use_gt else "discovered"
+        present_classes = [c for c in range(W) if bool((cls_idx == c).any())]
+        if _use_gt:
+            _emb = (task.causal_model.embeddings or {}).get("result")
+            _vals = task.intervention_values
+            _periods = task.causal_model.periods or {}
+            periodic = "result" in _periods
+            _coords = {
+                c: (float(_emb(_vals[c])[0]) if _emb else float(c)) for c in present_classes
+            }
+            present_classes.sort(key=lambda c: _coords[c])
+            rank = np.full(W, -1, dtype=np.int64)
+            for pos, c in enumerate(present_classes):
+                rank[c] = pos
+        else:
+            if transition_adj is None:
+                raise ValueError("transport requires behavior_geometry=precomputed (transition graph).")
+            _ord = discovered_order(transition_adj)
+            if _ord is None:
+                raise ValueError(
+                    "transport: discovered graph is not a 1-D chain (branched/2-D); "
+                    "set transport_use_ground_truth_coord=true to test the mechanism, "
+                    "or use the atlas (future work). "
+                    f"discovered_topology={discovered_topology}"
+                )
+            rank, periodic = _ord
+            present_classes = [c for c in present_classes if rank[c] >= 0]
+            present_classes.sort(key=lambda c: int(rank[c]))
+        n_ranks = len(present_classes)
+        logger.info("transport coordinate: source=%s periodic=%s n_ranks=%d", _coord_source, periodic, n_ranks)
         U_amb = torch.stack(
             [features[cls_idx == c].mean(dim=0) for c in present_classes], dim=0
         )  # (Wp, k) real per-class centroids

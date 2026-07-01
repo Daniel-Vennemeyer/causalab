@@ -25,11 +25,15 @@ behavior_manifold_vae:
   token_positions: [last_token]
   behavior_geometry: precomputed
   transition_variable: number
-  # alphabet's transition graph is SPARSE (only increments 1,2 -> few supporting
-  # entities/edge), so the 0.34 relative denoise that cleaned months fragments it
-  # into 4 components. Keep all edges (0.0) so the graph stays connected; the robust
-  # discovered_order (largest component + diameter ordering) tolerates the chords.
   transition_edge_min_frac: 0.0
+  # alphabet's DISCOVERED transition graph is genuinely noisy (sparse 2-increment
+  # stepping + model errors -> a hubbed max_deg-7 graph, not a 1-D chain), so the
+  # discovered coordinate is unreliable here. Use the ground-truth ordinal to test
+  # the transport MECHANISM in isolation (does the field match the spline 0.219 given
+  # a clean line coord?). weekdays uses the DISCOVERED cycle (clean). This cleanly
+  # separates "does transport work" from "is discovery clean" -- alphabet answers the
+  # former; its noisy graph is itself a finding about discovery quality.
+  transport_use_ground_truth_coord: true
   transport_neighbor_radius: 1
   transport_w_density: 0.0
   patch_eval: true
