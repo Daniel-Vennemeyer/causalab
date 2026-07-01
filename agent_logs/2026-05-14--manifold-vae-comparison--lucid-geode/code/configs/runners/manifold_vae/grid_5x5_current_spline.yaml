@@ -17,6 +17,10 @@ defaults:
 
 task:
   target_variable: node_coordinates
+  # Speed: baseline + subspace run the 8B over EVERY train example (2048-token walks),
+  # so wall-clock scales with n_train. The pipeline only needs per-node centroids
+  # (25 nodes), so 500 (~20/node) is ample and ~2x faster than the default 1000.
+  n_train: 500
 
 # ICLR prompts are ~2048-token random walks, so every 8B forward is long -> the
 # default batch 32 OOMs the attention. Small batches for every step that runs the

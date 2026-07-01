@@ -16,6 +16,7 @@ defaults:
 
 task:
   target_variable: node_coordinates
+  n_train: 500   # must match grid_5x5_current_spline (VAE loads its cached dataset/features)
 
 behavior_manifold_vae:
   method: flat_vae

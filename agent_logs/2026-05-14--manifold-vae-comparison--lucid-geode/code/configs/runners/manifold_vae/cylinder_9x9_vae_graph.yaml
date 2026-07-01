@@ -13,6 +13,7 @@ defaults:
 
 task:
   target_variable: node_coordinates
+  n_train: 810   # must match cylinder_9x9_current_spline (VAE loads its cached dataset/features)
 
 behavior_manifold_vae:
   method: flat_vae
