@@ -160,8 +160,9 @@ def main():
         cycles.append(cyc)
         order_by_level_score.append(tau_level)
         per_prompt.append(
-            {"prompt_idx": pi, "agreement": agr, "cycle_rate": cyc,
-             "order": order, "tau_vs_levels": tau_level, "win_scores": scores.tolist()}
+            {"prompt_idx": int(pi), "agreement": float(agr), "cycle_rate": float(cyc),
+             "order": [int(x) for x in order], "tau_vs_levels": float(tau_level),
+             "win_scores": [float(x) for x in scores]}
         )
 
     agg_agree = float(np.nanmean(agreements)) if agreements else float("nan")
@@ -178,11 +179,7 @@ def main():
         "mean_tau_vs_system_levels": agg_tau,
         "per_prompt": per_prompt,
     }
-    with open(os.path.join(args.out, "gate_a.json"), "w") as f:
-        json.dump(result, f, indent=2)
-    with open(os.path.join(args.out, "responses.json"), "w") as f:
-        json.dump(all_responses, f, indent=2)
-
+    # Print the verdict FIRST — never lose it to a serialization error.
     print("=" * 60)
     print(f"GATE A: {verdict['verdict']}")
     print(f"  agreement (judge reliability): {agg_agree:.3f}  (>= {verdict['thresholds']['min_agreement']}?)")
@@ -190,6 +187,20 @@ def main():
     print(f"  tau vs system-level spectrum:  {agg_tau:.3f}   (does ranking track honest->sycophant?)")
     print(f"  -> {args.out}/gate_a.json")
     print("=" * 60)
+
+    def _native(o):
+        if isinstance(o, np.integer):
+            return int(o)
+        if isinstance(o, np.floating):
+            return float(o)
+        if isinstance(o, np.ndarray):
+            return o.tolist()
+        raise TypeError(f"not serializable: {type(o)}")
+
+    with open(os.path.join(args.out, "gate_a.json"), "w") as f:
+        json.dump(result, f, indent=2, default=_native)
+    with open(os.path.join(args.out, "responses.json"), "w") as f:
+        json.dump(all_responses, f, indent=2, default=_native)
 
 
 if __name__ == "__main__":
