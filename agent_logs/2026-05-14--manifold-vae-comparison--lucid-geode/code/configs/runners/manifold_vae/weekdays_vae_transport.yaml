@@ -26,7 +26,10 @@ behavior_manifold_vae:
   transition_variable: number
   transition_edge_min_frac: 0.34
   transport_neighbor_radius: 1
-  transport_w_density: 0.0
+  # on-data penalty (fights multi-step integration drift; discrete density geometry).
+  # Alphabet needed this: w_density 0->1.0 took dist 1.45->0.527. weekdays uses the
+  # DISCOVERED cycle (clean), so this is the fully-unsupervised transport+density test.
+  transport_w_density: 1.0
   patch_eval: true
   device: cpu
   arm_label: transport

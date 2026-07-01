@@ -1,0 +1,34 @@
+# @package _global_
+# Local behavioral transport on months (ring, W=12). No VAE, no decoder, no
+# parametric manifold: learn a tangent field v(h) and integrate it from real
+# centroids along the DISCOVERED cycle (periodic shortest-arc), with an on-data
+# density penalty. months' transition graph is a clean 12-cycle at edge_min_frac
+# 0.34, so this is a fully-UNSUPERVISED transport+density test (discovered coord).
+# Decisive comparison: transport vs the best VAE (transition_adaptive 0.338) vs the
+# spline geodesic (0.192).
+defaults:
+  - /base
+  - /task: natural_domains_arithmetic_months
+  - /model: llama31_8b
+  - /analysis/behavior_manifold_vae
+  - _self_
+
+task:
+  target_variable: result
+
+behavior_manifold_vae:
+  method: transport
+  topology: unstructured
+  metric: latent_linear
+  latent_dim: 1
+  n_charts: 1
+  layers: [28]
+  token_positions: [last_token]
+  behavior_geometry: precomputed
+  transition_variable: number
+  transition_edge_min_frac: 0.34
+  transport_neighbor_radius: 1
+  transport_w_density: 1.0
+  patch_eval: true
+  device: cpu
+  arm_label: transport
