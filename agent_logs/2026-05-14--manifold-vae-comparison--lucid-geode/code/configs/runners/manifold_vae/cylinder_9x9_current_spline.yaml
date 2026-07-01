@@ -17,8 +17,15 @@ defaults:
 task:
   target_variable: node_coordinates
 
+# ICLR prompts are ~2048-token random walks -> long 8B forwards; default batch 32
+# OOMs. Small batches for every 8B step (baseline + subspace). path_steering batch
+# via the BATCH env (run with BATCH=4).
+baseline:
+  batch_size: 4
+
 subspace:
   layers: [28]
+  batch_size: 4
 
 activation_manifold:
   layers: [28]

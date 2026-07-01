@@ -39,6 +39,6 @@ behavior_manifold_vae:
   patch_eval: true
   patch_num_steps: 20
   patch_n_prompts: 5
-  patch_batch_size: 8
+  patch_batch_size: 4
   device: cpu
   arm_label: graph

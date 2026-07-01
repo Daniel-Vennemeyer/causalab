@@ -42,6 +42,6 @@ behavior_manifold_vae:
   patch_eval: true
   patch_num_steps: 20
   patch_n_prompts: 5
-  patch_batch_size: 8      # ICLR prompts are long (2048-token walks) -> small batch
+  patch_batch_size: 4      # ICLR prompts are long (2048-token walks) -> tiny batch (OOM guard)
   device: cpu
   arm_label: graph
