@@ -101,17 +101,37 @@ def _read_json(path: str) -> dict[str, Any] | None:
         return None
 
 
-def _arm_id_from_path(root: str, comparison_path: str) -> str:
-    """Stable arm id = path of the arm dir relative to the vae root."""
+def _locate(root: str, name: str) -> str:
+    """Find analysis dir ``name`` under ``root``, tolerating an intermediate
+    domain subdir. Some tasks nest artifacts under a domain segment
+    (``.../llama31_8b/months/behavior_manifold_vae/...``) while others put them
+    directly under the experiment root (``.../llama31_8b/behavior_manifold_vae``).
+    Returns the shallowest match, or ``root/name`` if none (callers guard on
+    existence). Prevents empty summaries when the domain subdir is present.
+    """
+    direct = os.path.join(root, name)
+    if os.path.isdir(direct):
+        return direct
+    hits = [
+        d
+        for d in glob.glob(os.path.join(root, "**", name), recursive=True)
+        if os.path.isdir(d)
+    ]
+    hits.sort(key=lambda p: p.count(os.sep))  # prefer shallowest
+    return hits[0] if hits else direct
+
+
+def _arm_id_from_path(vae_root: str, comparison_path: str) -> str:
+    """Stable arm id = path of the arm dir relative to the (located) vae root."""
     arm_dir = os.path.dirname(comparison_path)
-    rel = os.path.relpath(arm_dir, os.path.join(root, "behavior_manifold_vae"))
+    rel = os.path.relpath(arm_dir, vae_root)
     return rel.replace(os.sep, "/")
 
 
 def _collect_vae_arms(root: str) -> list[dict[str, Any]]:
     """One row per behavior_manifold_vae arm (from comparison_ready.json)."""
     rows: list[dict[str, Any]] = []
-    vae_root = os.path.join(root, "behavior_manifold_vae")
+    vae_root = _locate(root, "behavior_manifold_vae")
     if not os.path.isdir(vae_root):
         return rows
     for dirpath, _dirnames, filenames in os.walk(vae_root):
@@ -120,7 +140,7 @@ def _collect_vae_arms(root: str) -> list[dict[str, Any]]:
             data = _read_json(cpath)
             if data is None:
                 continue
-            row: dict[str, Any] = {"arm_id": _arm_id_from_path(root, cpath)}
+            row: dict[str, Any] = {"arm_id": _arm_id_from_path(vae_root, cpath)}
             row.update(data)
             rows.append(row)
     return rows
@@ -173,7 +193,7 @@ def _collect_spline_baseline(root: str) -> dict[str, Any] | None:
         row[k] = None
 
     # reconstruction (KL) from activation_manifold metadata.json files.
-    am_root = os.path.join(root, "activation_manifold")
+    am_root = _locate(root, "activation_manifold")
     if os.path.isdir(am_root):
         for meta_path in glob.glob(
             os.path.join(am_root, "**", "metadata.json"), recursive=True
@@ -194,7 +214,7 @@ def _collect_spline_baseline(root: str) -> dict[str, Any] | None:
                 break
 
     # path_steering: isometry pearson_r + coherence + distance_from_behavior_manifold
-    ps_root = os.path.join(root, "path_steering")
+    ps_root = _locate(root, "path_steering")
     iso = _first_metrics_json(ps_root, ("isometry",))
     if iso is not None:
         if "pearson_r" in iso:
@@ -499,12 +519,12 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             csv.DictWriter(f, fieldnames=columns).writeheader()
         missing = {
             "behavior_manifold_vae": os.path.isdir(
-                os.path.join(root, "behavior_manifold_vae")
+                _locate(root, "behavior_manifold_vae")
             ),
             "activation_manifold": os.path.isdir(
-                os.path.join(root, "activation_manifold")
+                _locate(root, "activation_manifold")
             ),
-            "path_steering": os.path.isdir(os.path.join(root, "path_steering")),
+            "path_steering": os.path.isdir(_locate(root, "path_steering")),
             "note": (
                 "No spline or VAE manifold arms found under experiment_root. "
                 "Run behavior_manifold_vae and/or the current-code spline "
