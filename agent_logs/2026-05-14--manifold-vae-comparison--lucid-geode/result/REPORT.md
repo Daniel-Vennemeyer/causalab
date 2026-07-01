@@ -92,6 +92,19 @@ The VAE recovers the correct behavioral geometry — a ring for cyclic domains, 
 
 **Unified finding (corrected):** discovery is universal (isometry 0.73–0.84, all topologies); the **spline's geodesic advantage is universal** (beats linear everywhere, ~2–4×, matching the paper); the VAE is a discovery-driven approximation that captures that advantage partially; and `w_manifold` is the one component whose sign is topology-dependent, correctly handled by the adaptive gate.
 
+### Follow-up arms (months, cycle): denoise helps; a 1-D topology prior is refuted
+
+| arm | latent | isometry | dist ↓ |
+|---|---|---|---|
+| transition_centroid | 2-D unstructured | 0.842 | 0.689 |
+| transition_manifold | 2-D unstructured + w_manifold | 0.677 | 0.430 ± 0.21 |
+| **transition_adaptive** | 2-D unstructured + w_manifold + **denoised d_y** | 0.675 | **0.338 ± 0.05** |
+| transition_topo | **1-D s1 prior**, no w_manifold | 0.540 | **1.697** |
+
+- **Transition-graph denoising (`edge_min_frac=0.34`) is a validated win.** `transition_adaptive` is the best VAE arm (0.338, closest to the spline's 0.192) and far more *stable* (±0.05 vs manifold's ±0.21) — a cleaner discovered `d_y` both lowers and de-noises steering.
+- **A 1-D topology prior (`s1`) is REFUTED.** Forcing an angular 1-D latent made *both* discovery (iso 0.84→0.54) and steering (0.43→**1.70**, worst arm) far worse. Reason: a 1-D *latent* path is ordered, but its **decoded 64-D image is not automatically on the activation manifold** — the decoder still drifts off-data, and dropping `w_manifold` (mistakenly reasoned as unnecessary for a 1-D path) removed the only control on decoder faithfulness. The 2-D unstructured latent captures the ring *better* than an imposed circle; `w_manifold`, not the topology prior, is the lever.
+- **Implication:** the residual VAE↔spline gap is decoder faithfulness, not latent dimensionality. The topology prior can't fix it because it still *has a decoder*. This is the direct motivation for the **transport** method (a decoder-free tangent field), which is implemented but not yet run.
+
 ### TWO reference-manifold bugs on non-cyclic domains (both found + fixed)
 
 The non-cyclic domains had two *separate* bugs in the reference manifolds (not the VAE), both from unsupervised coordinate/periodicity heuristics misfiring on a line:
