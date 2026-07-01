@@ -87,11 +87,14 @@ for dom in ${DOMAINS}; do
   # 2) VAE arms via the shared sweep (handles thread caps, seeds, compare).
   #    PATCH=1 -> sweep forces JOBS=1 and streams live. For age (PATCH=0) force
   #    JOBS=1 too so its training/isometry tqdm streams instead of going quiet.
-  JOBS_ENV=""; [ "${PATCHFLAG}" = "0" ] && JOBS_ENV="1"
+  #    NB: pass JOBS as a LITERAL assignment (only the value is expanded). A fully
+  #    expanded "JOBS=1" prefix (${X:+JOBS=$X}) is parsed as a command, not an
+  #    assignment -> "JOBS=1: command not found". Empty value -> sweep's default.
+  JOBS_VAL=""; [ "${PATCHFLAG}" = "0" ] && JOBS_VAL="1"
   echo ">>> [${i_dom}/${n_total}] arms: ${ARMS}  (PATCH=${PATCHFLAG}, BATCH=${BATCH})"
   TASK_DIRNAME="${TDIR}" PATCH="${PATCHFLAG}" CUDA_VISIBLE_DEVICES="${CUDA}" \
     DEVICE="${DEVICE}" ARMS="${ARMS}" SEEDS="${SEEDS}" BATCH="${BATCH}" \
-    PATH_STEPS="${PATH_STEPS}" ${JOBS_ENV:+JOBS=$JOBS_ENV} \
+    PATH_STEPS="${PATH_STEPS}" JOBS="${JOBS_VAL}" \
     bash "${SESSION_DIR}/run/sweep.sh"
 done
 
