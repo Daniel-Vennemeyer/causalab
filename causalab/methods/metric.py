@@ -440,7 +440,11 @@ def compute_reference_distributions(
         if pipeline is None:
             raise ValueError("pipeline is required when output_logits is not provided")
         n_batches = math.ceil(len(dataset) / batch_size)
-        for batch_idx in range(n_batches):
+        from tqdm import tqdm as _tqdm
+
+        for batch_idx in _tqdm(
+            range(n_batches), desc="base accuracy: 8B forwards", leave=False
+        ):
             start = batch_idx * batch_size
             end = min(start + batch_size, len(dataset))
             batch_examples = dataset[start:end]

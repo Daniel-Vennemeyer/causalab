@@ -215,7 +215,11 @@ def main(cfg: DictConfig) -> dict[str, Any]:
     if score_token_ids is not None and task.intervention_values:
         output_logits: list[list[torch.Tensor]] = []
         n_batches = math.ceil(len(train_dataset) / analysis.batch_size)
-        for batch_idx in range(n_batches):
+        from tqdm import tqdm as _tqdm
+
+        for batch_idx in _tqdm(
+            range(n_batches), desc="baseline logits: 8B forwards", leave=False
+        ):
             start = batch_idx * analysis.batch_size
             end = min(start + analysis.batch_size, len(train_dataset))
             batch_inputs = [ex["input"] for ex in train_dataset[start:end]]
