@@ -246,6 +246,38 @@ def _build_transition_dy(
     return torch.from_numpy(dist).float(), adj
 
 
+def _build_graph_dy(task: Any, W: int) -> tuple[torch.Tensor | None, np.ndarray | None]:
+    """Relational ``d_y`` for graph tasks (graph_walk 2-D): shortest-path distance on
+    the KNOWN graph over the W concept nodes.
+
+    Unlike ``_build_transition_dy`` (which steps an ordinal INPUT), the 2-D graph has
+    no ordinal to step — so we read the structure directly from the causal model's
+    stored graph (``task.causal_model._graph.adjacency``; node ids 0..W-1 align with
+    ``intervention_value_index``). This is the SUPERVISED coordinate (the paper uses
+    the known graph); discovering it from random-walk transitions is future work.
+    Returns ``(dist, adj)`` — the (W, W) graph-distance matrix and the 0/1 adjacency
+    (fed to ``_classify_topology`` → 'complex' for a 2-D lattice).
+    """
+    graph = getattr(task.causal_model, "_graph", None)
+    adjacency = getattr(graph, "adjacency", None) if graph is not None else None
+    if not adjacency:
+        return None, None
+    A = np.zeros((W, W), dtype=np.float64)
+    for node, nbrs in adjacency.items():
+        if int(node) >= W:
+            continue
+        for n in nbrs:
+            if int(n) < W:
+                A[int(node), int(n)] = 1.0
+                A[int(n), int(node)] = 1.0
+    from scipy.sparse.csgraph import shortest_path
+
+    dist = shortest_path(A, method="D", directed=False, unweighted=True)
+    dist[~np.isfinite(dist)] = float(W)
+    np.fill_diagonal(dist, 0.0)
+    return torch.from_numpy(dist).float(), A
+
+
 def _resample_path(path: torch.Tensor, num_steps: int) -> torch.Tensor:
     """Linearly resample a ``(P, k)`` path to exactly ``num_steps`` points.
 
@@ -765,7 +797,28 @@ def main(cfg: DictConfig) -> dict[str, Any]:
     transition_edge_count: int | None = None
     transition_hold_fixed: list[str] | None = None
     discovered_topology: dict[str, Any] | None = None
-    if behavior_geometry == "precomputed":
+    transition_adj = None
+    if behavior_geometry == "graph":
+        # Known-graph d_y (graph_walk 2-D): shortest-path distance on the task graph.
+        # No ordinal input to step; read the structure from the stored causal graph.
+        geometry_matrix, transition_adj = _build_graph_dy(task, W)
+        if geometry_matrix is None:
+            raise ValueError(
+                "behavior_geometry=graph requires a task with a stored graph "
+                "(task.causal_model._graph.adjacency), e.g. graph_walk."
+            )
+        transition_edge_count = int((geometry_matrix.numpy() == 1.0).sum() // 2)
+        discovered_topology = _classify_topology(transition_adj)
+        logger.info(
+            "graph d_y built: W=%d, edges=%d, discovered_topology=%s",
+            W, transition_edge_count, discovered_topology,
+        )
+        if bool(analysis.get("adapt_losses_to_topology", False)) and discovered_topology.get("is_convex", False):
+            for wk in ("w_manifold", "w_geodesic"):
+                if loss_weights.get(wk, 0.0) != 0.0:
+                    logger.info("topology=%s (convex) -> gating %s -> 0.0", discovered_topology["kind"], wk)
+                    loss_weights[wk] = 0.0
+    elif behavior_geometry == "precomputed":
         # Input variable names come from the causal model (exogenous vars with no
         # parents — e.g. entity, number). NOTE: ``ex["input"]`` is a CausalTrace,
         # not a dict — it supports ``trace[var]`` lookup but has no ``.keys()``,
@@ -1047,7 +1100,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         # The precomputed (transition) isometry geometry does NOT depend on the
         # baseline behavior targets — its d_y is the transition matrix — so keep
         # w_isometry. Every other geometry's euclidean d_y needs the targets.
-        if behavior_geometry != "precomputed":
+        if behavior_geometry not in ("precomputed", "graph"):
             loss_weights["w_isometry"] = 0.0
 
     # --- Build the training set ----------------------------------------------
@@ -1121,7 +1174,9 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         val_behavior_targets=val_targets,
         geometry_coords=train_geometry_coords,
         val_geometry_coords=val_geometry_coords,
-        geometry_distance=behavior_geometry,
+        geometry_distance=(
+            "precomputed" if behavior_geometry in ("precomputed", "graph") else behavior_geometry
+        ),
         geometry_period=geometry_period,
         geometry_matrix=geometry_matrix,
         contrastive_margin=contrastive_margin,

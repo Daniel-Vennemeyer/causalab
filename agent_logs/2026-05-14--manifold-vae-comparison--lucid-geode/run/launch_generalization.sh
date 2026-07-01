@@ -50,6 +50,10 @@ declare -A SPEC
 SPEC[months]="natural_domains_arithmetic_months|months_current_spline|1|months_vae_transition_centroid months_vae_transition_manifold"
 SPEC[alphabet]="natural_domains_arithmetic_alphabet|alphabet_current_spline|1|alphabet_vae_transition_centroid alphabet_vae_transition_manifold"
 SPEC[age]="natural_domains_arithmetic_age|age_discovery_baseline|0|age_vae_transition_centroid"
+# Phase 2: 2-D graph_walk. NOTE: run these with BATCH=8 PATH_STEPS=20 (long ICLR
+# random-walk prompts need a small 8B batch; graph_walk convention is 20 steps).
+SPEC[grid]="graph_walk_grid_5x5|grid_5x5_current_spline|1|grid_5x5_vae_graph"
+SPEC[cylinder]="graph_walk_cylinder_9x9|cylinder_9x9_current_spline|1|cylinder_9x9_vae_graph"
 
 DOMAINS="${DOMAINS:-months alphabet age}"
 

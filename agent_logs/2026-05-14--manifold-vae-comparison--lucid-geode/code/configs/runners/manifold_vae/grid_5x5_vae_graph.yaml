@@ -1,0 +1,47 @@
+# @package _global_
+# Phase 2: behavior-aligned VAE on the 2-D grid_5x5 graph_walk task. Uses a 2-D
+# UNSTRUCTURED latent (latent_dim=2) — NOT a topology prior (the s1 prior backfired
+# on 1-D; the 2-D lattice is best learned in an unstructured latent). d_y = known
+# graph distance (behavior_geometry=graph; supervised coord, the paper's setup).
+# w_manifold on (adaptive gate keeps it: a grid classifies as non-convex "complex").
+# Patch step-matched to the spline (20 steps / 5 prompts); small batch for the long
+# ICLR random-walk prompts. Decisive test: does the VAE recover 2-D grid geometry
+# (isometry) and steer on it (distance) vs the 2-D spline + linear.
+defaults:
+  - /base
+  - /task: graph_walk_grid_5x5
+  - /model: llama31_8b
+  - /analysis/behavior_manifold_vae
+  - _self_
+
+task:
+  target_variable: node_coordinates
+
+behavior_manifold_vae:
+  method: flat_vae
+  topology: unstructured
+  metric: latent_linear
+  latent_dim: 2
+  n_charts: 1
+  layers: [28]
+  token_positions: [last]
+  behavior_geometry: graph
+  adapt_losses_to_topology: true
+  contrastive_margin: 1.0
+  loss_weights:
+    w_recon: 0.2
+    w_kl: 0.01
+    w_behavior: 0.0
+    w_isometry: 2.0
+    w_geodesic: 0.0
+    w_patch: 0.0
+    w_contrastive: 2.0
+    w_centroid_iso: 5.0
+    w_compactness: 1.0
+    w_manifold: 1.0
+  patch_eval: true
+  patch_num_steps: 20
+  patch_n_prompts: 5
+  patch_batch_size: 8      # ICLR prompts are long (2048-token walks) -> small batch
+  device: cpu
+  arm_label: graph

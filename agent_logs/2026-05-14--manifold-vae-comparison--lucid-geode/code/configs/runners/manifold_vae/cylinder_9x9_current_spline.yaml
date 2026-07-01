@@ -1,0 +1,38 @@
+# @package _global_
+# Phase 2 spline baseline for the 2-D cylinder_9x9 ICLR graph_walk task (one periodic
+# dimension). Mirrors the shipped cylinder_9x9_8b_pipeline (intrinsic_dim=2, parameter
+# mode, TPS with ghost-point closure on the periodic angle). Produces the caches the
+# VAE/graph arm reuses; step-matched to the graph_walk convention (20 / 5).
+defaults:
+  - /base
+  - /task: graph_walk_cylinder_9x9
+  - /model: llama31_8b
+  - /analysis/baseline
+  - /analysis/subspace
+  - /analysis/activation_manifold
+  - /analysis/output_manifold
+  - /analysis/path_steering
+  - _self_
+
+task:
+  target_variable: node_coordinates
+
+subspace:
+  layers: [28]
+
+activation_manifold:
+  layers: [28]
+  token_positions: [last]
+  intrinsic_mode: parameter
+  intrinsic_dim: 2
+  batch_size: 8
+
+output_manifold:
+  intrinsic_mode: parameter
+  intrinsic_dim: 2
+  batch_size: 8
+
+path_steering:
+  batch_size: 8
+  num_steps_along_path: 20
+  n_prompts: 5

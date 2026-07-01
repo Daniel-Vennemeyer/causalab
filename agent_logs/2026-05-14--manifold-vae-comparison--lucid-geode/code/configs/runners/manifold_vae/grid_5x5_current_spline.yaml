@@ -1,0 +1,39 @@
+# @package _global_
+# Phase 2 spline baseline for the 2-D grid_5x5 ICLR graph_walk task. Mirrors the
+# shipped grid_5x5_8b_pipeline (intrinsic_dim=2, parameter mode = ground-truth node
+# coords, TPS activation + belief manifolds) and produces the baseline + subspace +
+# belief-manifold caches the VAE/graph arm reuses. num_steps/n_prompts match the
+# graph_walk convention (20 / 5) so the VAE patch is step-matched.
+defaults:
+  - /base
+  - /task: graph_walk_grid_5x5
+  - /model: llama31_8b
+  - /analysis/baseline
+  - /analysis/subspace
+  - /analysis/activation_manifold
+  - /analysis/output_manifold
+  - /analysis/path_steering
+  - _self_
+
+task:
+  target_variable: node_coordinates
+
+subspace:
+  layers: [28]
+
+activation_manifold:
+  layers: [28]
+  token_positions: [last]
+  intrinsic_mode: parameter
+  intrinsic_dim: 2
+  batch_size: 8
+
+output_manifold:
+  intrinsic_mode: parameter
+  intrinsic_dim: 2
+  batch_size: 8
+
+path_steering:
+  batch_size: 8
+  num_steps_along_path: 20
+  n_prompts: 5

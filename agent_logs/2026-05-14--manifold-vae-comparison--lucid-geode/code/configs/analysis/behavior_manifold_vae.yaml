@@ -28,7 +28,7 @@ loss_weights:
   w_compactness: 0.0    # within-class scatter penalty (crisp centroids)
   w_manifold: 0.0       # off-manifold energy of decoded latent interpolants (keeps steering paths in-distribution)
 behavior_distance: hellinger   # kl | hellinger | js
-behavior_geometry: euclidean    # euclidean | cyclic | ordinal | activation | precomputed  (d_y for isometry; "activation" = label-free; "precomputed" = transition-derived (W,W) matrix built in the analysis from the model's behavioral transitions)
+behavior_geometry: euclidean    # euclidean | cyclic | ordinal | activation | precomputed | graph  (d_y for isometry; "activation" = label-free; "precomputed" = transition-derived (W,W) matrix from the model's +1 behavioral transitions; "graph" = shortest-path distance on the task's KNOWN graph, for 2-D graph_walk where there is no ordinal input to step)
 behavior_period: null           # null -> use n_classes (W); 7 for weekdays cyclic
 contrastive_margin: 1.0
 # Transition-derived d_y knobs (only used when behavior_geometry == precomputed):

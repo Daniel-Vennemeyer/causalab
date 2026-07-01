@@ -1,0 +1,44 @@
+# @package _global_
+# Phase 2: behavior-aligned VAE on the 2-D cylinder_9x9 graph_walk task (one periodic
+# dimension). Identical recipe to grid_5x5_vae_graph — 2-D UNSTRUCTURED latent + known
+# graph-distance d_y. The unstructured latent sidesteps the topology adapter's fixed
+# periodic-dim assumption (it learns the angular wrap from d_y). W=81 nodes; patch
+# samples an even-stride 21-pair budget of C(81,2). Step-matched to the spline (20/5).
+defaults:
+  - /base
+  - /task: graph_walk_cylinder_9x9
+  - /model: llama31_8b
+  - /analysis/behavior_manifold_vae
+  - _self_
+
+task:
+  target_variable: node_coordinates
+
+behavior_manifold_vae:
+  method: flat_vae
+  topology: unstructured
+  metric: latent_linear
+  latent_dim: 2
+  n_charts: 1
+  layers: [28]
+  token_positions: [last]
+  behavior_geometry: graph
+  adapt_losses_to_topology: true
+  contrastive_margin: 1.0
+  loss_weights:
+    w_recon: 0.2
+    w_kl: 0.01
+    w_behavior: 0.0
+    w_isometry: 2.0
+    w_geodesic: 0.0
+    w_patch: 0.0
+    w_contrastive: 2.0
+    w_centroid_iso: 5.0
+    w_compactness: 1.0
+    w_manifold: 1.0
+  patch_eval: true
+  patch_num_steps: 20
+  patch_n_prompts: 5
+  patch_batch_size: 8
+  device: cpu
+  arm_label: graph
