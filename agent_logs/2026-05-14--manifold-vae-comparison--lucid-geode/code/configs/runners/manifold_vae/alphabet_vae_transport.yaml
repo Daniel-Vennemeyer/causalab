@@ -25,7 +25,11 @@ behavior_manifold_vae:
   token_positions: [last_token]
   behavior_geometry: precomputed
   transition_variable: number
-  transition_edge_min_frac: 0.34   # denoise -> clean 1-D chain for discovered_order
+  # alphabet's transition graph is SPARSE (only increments 1,2 -> few supporting
+  # entities/edge), so the 0.34 relative denoise that cleaned months fragments it
+  # into 4 components. Keep all edges (0.0) so the graph stays connected; the robust
+  # discovered_order (largest component + diameter ordering) tolerates the chords.
+  transition_edge_min_frac: 0.0
   transport_neighbor_radius: 1
   transport_w_density: 0.0
   patch_eval: true

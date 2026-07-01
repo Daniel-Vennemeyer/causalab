@@ -59,8 +59,29 @@ def test_discovered_order_cycle():
 
 
 def test_discovered_order_branched_is_none():
-    # a 2-D grid has degree-4 interior nodes -> not a 1-D chain
+    # a 2-D grid is dense (mean degree ~3, degree-4 interior) -> not a 1-D chain
     assert discovered_order(_grid_adj(4, 4)) is None
+
+
+def test_discovered_order_noisy_line_recovers_via_lcc():
+    # 8-node line + 1 spurious chord + a disconnected 2-node fragment (like the
+    # over-pruned alphabet graph). Robust order should use the largest component
+    # and return a line (periodic=False) covering the 8 main nodes.
+    n = 10
+    a = np.zeros((n, n))
+    for i in range(7):  # nodes 0..7 form a line
+        a[i, i + 1] = a[i + 1, i] = 1
+    a[1, 4] = a[4, 1] = 1          # spurious chord
+    a[8, 9] = a[9, 8] = 1          # separate 2-node fragment
+    res = discovered_order(a)
+    assert res is not None
+    rank, periodic = res
+    assert periodic is False
+    main = [i for i in range(8) if rank[i] >= 0]
+    assert len(main) == 8              # all line nodes ranked
+    assert rank[8] == -1 and rank[9] == -1   # fragment excluded
+    # endpoints of the line are at the extreme ranks
+    assert {int(rank[0]), int(rank[7])} == {0, 7} or {int(rank[0]), int(rank[7])} == {7, 0}
 
 
 def test_signed_step_periodic_shortest_arc():

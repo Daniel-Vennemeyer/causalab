@@ -32,58 +32,75 @@ import torch.nn as nn
 # Discovered 1-D coordinate from the transition graph (pure graph traversal)
 # ---------------------------------------------------------------------------
 def discovered_order(adj: np.ndarray) -> Optional[Tuple[np.ndarray, bool]]:
-    """Order the present classes along the discovered transition graph.
+    """Order the present classes along the discovered transition graph — ROBUST to
+    the noisy near-chains real behavioral graphs produce (spurious edges, a few
+    branch nodes, disconnected fragments).
 
-    Returns ``(rank, periodic)`` where ``rank`` is a (W,) integer array giving each
-    class's position along the chain (``-1`` for absent/off-chain classes) and
-    ``periodic`` is True for a cycle. Returns ``None`` if the graph is not a clean
-    1-D chain (any node of degree > 2, or a degree profile that is neither a path
-    nor a single cycle) — transport's 1-D coordinate does not apply there (that is
-    the ``complex``/2-D regime, handled by an atlas in future work).
+    Returns ``(rank, periodic)`` where ``rank`` is a (W,) integer position along the
+    chain (``-1`` for classes off the main component) and ``periodic`` is True for a
+    cycle. Returns ``None`` only when the graph is genuinely NOT 1-D-like (dense /
+    2-D lattice: mean degree high or many degree>3 nodes) — that is the atlas regime.
 
-    ``adj`` must be the DENOISED 0/1 symmetric adjacency (spurious edges make a line
-    look branched); see ``_build_transition_dy(edge_min_frac=...)``.
+    Robustness: restrict to the LARGEST connected component; a clean ~2-regular loop
+    with edges==nodes is a cycle (traverse -> integer positions); otherwise treat a
+    sparse near-path (mean degree <= 2.6, max degree <= 3) as a LINE and order nodes
+    by graph distance from one diameter endpoint (double-BFS), which is monotone
+    along the chain and tolerant of short branches/chords. ``adj`` is the (denoised)
+    0/1 symmetric adjacency.
     """
+    from collections import Counter
+
+    from scipy.sparse.csgraph import connected_components, shortest_path
+
     W = adj.shape[0]
-    deg = adj.sum(axis=1)
-    present = np.where(deg > 0)[0]
+    A = (np.asarray(adj) > 0).astype(np.float64)
+    present = np.where(A.sum(axis=1) > 0)[0]
     if present.size < 2:
         return None
-    if deg[present].max() > 2:
-        return None  # branched / 2-D — not a 1-D chain
-    endpoints = [int(i) for i in present if deg[i] == 1]
 
+    # --- largest connected component (handles fragmentation from over-pruning) --
+    _n_comp, labels = connected_components(A, directed=False)
+    main = Counter(labels[present].tolist()).most_common(1)[0][0]
+    nodes = [int(i) for i in present if labels[i] == main]
+    if len(nodes) < 2:
+        return None
+    sub = A[np.ix_(nodes, nodes)]
+    subdeg = sub.sum(axis=1)
+    n_nodes = len(nodes)
+    n_edges = int(sub.sum() // 2)
     rank = np.full(W, -1, dtype=np.int64)
 
-    def _walk(start: int) -> Optional[list]:
-        order = [start]
-        seen = {start}
-        cur, prev = start, -1
+    # --- clean single cycle: 2-regular, edges == nodes -------------------------
+    if subdeg.max() <= 2 and (subdeg == 1).sum() == 0 and n_edges == n_nodes:
+        order = [0]
+        seen = {0}
+        cur, prev = 0, -1
         while True:
-            nbrs = [j for j in range(W) if adj[cur, j] > 0 and j != prev]
-            nxt = [j for j in nbrs if j not in seen]
+            nxt = [j for j in range(n_nodes) if sub[cur, j] > 0 and j != prev and j not in seen]
             if not nxt:
                 break
             prev, cur = cur, nxt[0]
             order.append(cur)
             seen.add(cur)
-        return order
+        if len(order) == n_nodes:
+            for pos, k in enumerate(order):
+                rank[nodes[k]] = pos
+            return rank, True
 
-    if len(endpoints) == 2:  # path / line
-        order = _walk(endpoints[0])
-        if len(order) != present.size:
-            return None  # disconnected
-        for pos, node in enumerate(order):
-            rank[node] = pos
+    # --- sparse near-path -> LINE via diameter ordering ------------------------
+    if float(subdeg.mean()) <= 2.6 and int(subdeg.max()) <= 3:
+        d = shortest_path(sub, directed=False, unweighted=True)
+        finite = np.where(np.isfinite(d), d, -1.0)
+        a = int(np.unravel_index(np.argmax(finite), finite.shape)[0])  # diameter end
+        da = shortest_path(sub, directed=False, unweighted=True, indices=a)
+        far = float(da[np.isfinite(da)].max())
+        coord = np.where(np.isfinite(da), da, far + 1.0)
+        order = sorted(range(n_nodes), key=lambda k: (coord[k], nodes[k]))
+        for pos, k in enumerate(order):
+            rank[nodes[k]] = pos
         return rank, False
-    if len(endpoints) == 0:  # single cycle (all degree 2)
-        order = _walk(int(present[0]))
-        if len(order) != present.size:
-            return None
-        for pos, node in enumerate(order):
-            rank[node] = pos
-        return rank, True
-    return None  # e.g. one endpoint => malformed
+
+    return None  # dense / 2-D — 1-D transport does not apply (atlas is future work)
 
 
 def signed_step(z_from: float, z_to: float, periodic: bool, period: float) -> float:
