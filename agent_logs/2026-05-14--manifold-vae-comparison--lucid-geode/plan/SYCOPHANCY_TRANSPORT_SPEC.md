@@ -108,3 +108,10 @@ linear — demonstrating geometry-aware steering on a social behavior with a **s
 1. D1 + S1 + **GATE A** (topology/consistency) — cheapest; kills if multi-mode.
 2. A1 + **GATE B** (isometry) — kills if axis not steerable.
 3. T1 + E1 — only if A and B pass.
+
+## GATE A — RESULT (Llama-3.1-8B-Instruct, 16 prompts × 6 levels, 3 repeats)
+- **agreement 0.815** (judge reliable, > 0.70) — cycles are NOT noise.
+- **cycle_rate 0.162** (> 0.10 → FAIL) — real but mild intransitivity (random ≈ 0.25, clean 1-D ≈ 0).
+- **tau vs system-level spectrum 0.500** — the model doesn't treat our 6 nudging levels as a monotonic sycophancy scale.
+- **Verdict: NOT clean 1-D.** A reliable judge that still can't totally-order sycophancy ⇒ distinct modes (flattery / excessive agreement / false deference / warmth) that aren't comparable on one axis — reproducing "sycophancy is not one thing" from the model's own judgments. Do NOT build 1-D transport on this coordinate.
+- **Leading cause (testable):** the 6 system levels conflate modes, so cross-mode comparisons are ambiguous → cycles + low tau. **Next: narrow the judge + generation to a SINGLE mode (e.g. excessive agreement with the user's claim) and re-run Gate A.** If a single mode is cleanly 1-D → atlas = per-mode 1-D transport (reuse existing transport). If single modes are still intransitive → genuine multi-dim, needs a 2-D+ coordinate (MDS on the preference matrix to estimate intrinsic dim).
