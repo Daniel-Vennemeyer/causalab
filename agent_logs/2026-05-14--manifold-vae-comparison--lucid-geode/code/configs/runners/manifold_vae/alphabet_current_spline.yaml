@@ -25,6 +25,16 @@ subspace:
 activation_manifold:
   layers: [28]
 
+# CRITICAL for non-cyclic domains: fit the BELIEF manifold from the task's DECLARED
+# parametrization (causal_model.periods), NOT the PCA-geometry heuristic. The pca
+# heuristic (detect_periodic_dims) FALSE-POSITIVES on alphabet — it wrapped the
+# line E..Z into a circle (dim0=[0,2π]), making A≈Z and corrupting isometry (≈0)
+# and distance (spline geometric 1.21 > linear 0.99, an impossible inversion).
+# alphabet is cyclic=False -> no 'result' period declared -> parameter mode fits a
+# correct NON-periodic line. (embeddings['result'] maps letters->index.)
+output_manifold:
+  intrinsic_mode: parameter
+
 path_steering:
   n_extra_pairs: 29
   batch_size: 128

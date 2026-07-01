@@ -26,3 +26,10 @@ subspace:
 
 activation_manifold:
   layers: [28]
+
+# Belief manifold from DECLARED parametrization, not the PCA heuristic (which
+# false-positives periodicity on non-cyclic domains and would wrap age's line into
+# a circle, corrupting isometry). age is cyclic=False -> parameter mode fits a
+# correct non-periodic line. See alphabet_current_spline for the full rationale.
+output_manifold:
+  intrinsic_mode: parameter

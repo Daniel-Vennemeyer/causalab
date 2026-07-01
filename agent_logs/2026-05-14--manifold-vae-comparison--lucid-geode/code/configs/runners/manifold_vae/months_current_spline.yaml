@@ -25,6 +25,14 @@ subspace:
 activation_manifold:
   layers: [28]
 
+# Belief manifold from the task's DECLARED parametrization (uniform methodology
+# with the non-cyclic Phase-1 domains, which REQUIRE it — see alphabet). months is
+# cyclic=True -> periods['result']=12 -> parameter mode fits a correct PERIODIC
+# manifold, so this also robustness-checks that the cyclic result survives the
+# switch away from the (here-correct-but-elsewhere-buggy) PCA periodicity heuristic.
+output_manifold:
+  intrinsic_mode: parameter
+
 path_steering:
   n_extra_pairs: 29
   batch_size: 128
