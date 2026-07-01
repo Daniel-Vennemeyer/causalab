@@ -106,6 +106,48 @@ def _per_class_centroids(
     return torch.stack(rows, dim=0), present
 
 
+def _classify_topology(adj: np.ndarray) -> dict[str, Any]:
+    """Classify the discovered transition graph's topology from its adjacency.
+
+    Returns a dict with ``kind`` in {cycle, line, complex, irregular, degenerate}
+    and ``is_convex`` (True only for a line/interval). The distinction drives the
+    topology-adaptive loss gate: curvature-inducing losses (``w_manifold``) help on
+    NON-convex manifolds (cycle/2-D) but hurt on a convex line, where straight-line
+    latent interpolation is already optimal (confirmed on weekdays/months vs
+    alphabet). Robust to spurious edges only if ``adj`` is already denoised.
+    """
+    deg = adj.sum(axis=1)
+    present = deg > 0
+    n_nodes = int(present.sum())
+    if n_nodes < 3:
+        return {"kind": "degenerate", "is_convex": True, "n_nodes": n_nodes}
+    sub = adj[present][:, present]
+    d = sub.sum(axis=1)
+    n_deg1 = int((d == 1).sum())
+    max_deg = int(d.max())
+    n_edges = int(sub.sum() // 2)
+    from scipy.sparse.csgraph import connected_components
+
+    n_comp, _ = connected_components(sub, directed=False)
+    if max_deg >= 3:
+        kind, is_convex = "complex", False  # 2-D lattice / branching (grid, cylinder)
+    elif n_deg1 == 0 and n_edges == n_nodes and n_comp == 1:
+        kind, is_convex = "cycle", False  # single loop (weekdays, months)
+    elif n_deg1 == 2 and n_edges == n_nodes - 1 and n_comp == 1:
+        kind, is_convex = "line", True  # path / interval (alphabet, age)
+    else:
+        kind, is_convex = "irregular", (n_deg1 >= 2 and max_deg <= 2)
+    return {
+        "kind": kind,
+        "is_convex": is_convex,
+        "n_nodes": n_nodes,
+        "n_edges": n_edges,
+        "n_deg1": n_deg1,
+        "max_deg": max_deg,
+        "n_components": int(n_comp),
+    }
+
+
 def _build_transition_dy(
     task: Any,
     train_dataset: list,
@@ -113,7 +155,8 @@ def _build_transition_dy(
     W: int,
     transition_variable: str,
     hold_fixed_vars: list[str],
-) -> torch.Tensor | None:
+    edge_min_frac: float = 0.0,
+) -> tuple[torch.Tensor | None, np.ndarray | None]:
     """Build a (W, W) relational ``d_y`` from the MODEL's behavioral transitions.
 
     No topology/period/ordering is injected. We only assume ``transition_variable``
@@ -134,8 +177,15 @@ def _build_transition_dy(
       4. Treat any ``A > 0`` as an unweighted edge; graph distance = all-pairs
          shortest path. Disconnected pairs -> ``W`` (large finite). Diagonal 0.
 
-    Returns a (W, W) float tensor of graph distances, or ``None`` if no unit-step
-    edges were found (caller logs/falls back).
+    ``edge_min_frac`` (denoising): drop edges whose count is below this fraction of
+    the larger endpoint's dominant-edge count. Model misclassifications create rare
+    singleton edges (e.g. months: 13 edges for a 12-cycle; alphabet: 26 for a
+    21-edge line) that perturb ``d_y`` and can flip the topology classification.
+    0.0 = keep every edge (backward-compatible). ~0.3 keeps modal transitions only.
+
+    Returns ``(dist, adj)`` — a (W, W) float tensor of graph distances (or ``None``)
+    and the (denoised) 0/1 adjacency ``np.ndarray`` (or ``None``) for topology
+    classification.
     """
     M = per_example_dists.shape[0]
     if len(train_dataset) != M:
@@ -177,7 +227,13 @@ def _build_transition_dy(
             "transition_variable with adjacent values present in the dataset.",
             transition_variable,
         )
-        return None
+        return None, None
+
+    # Denoise: drop edges rare relative to each endpoint's dominant transition.
+    if edge_min_frac > 0.0:
+        rowmax = A.max(axis=1)  # (W,) dominant-edge count per class
+        thresh = edge_min_frac * np.maximum(rowmax[:, None], rowmax[None, :])
+        A = np.where(A >= thresh, A, 0.0)
 
     # Unweighted graph distance (all-pairs shortest path) on the A>0 edges.
     from scipy.sparse.csgraph import shortest_path
@@ -187,7 +243,7 @@ def _build_transition_dy(
     # Disconnected pairs -> W (large finite); diagonal stays 0.
     dist[~np.isfinite(dist)] = float(W)
     np.fill_diagonal(dist, 0.0)
-    return torch.from_numpy(dist).float()
+    return torch.from_numpy(dist).float(), adj
 
 
 def _resample_path(path: torch.Tensor, num_steps: int) -> torch.Tensor:
@@ -685,6 +741,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
     geometry_matrix: torch.Tensor | None = None
     transition_edge_count: int | None = None
     transition_hold_fixed: list[str] | None = None
+    discovered_topology: dict[str, Any] | None = None
     if behavior_geometry == "precomputed":
         # Input variable names come from the causal model (exogenous vars with no
         # parents — e.g. entity, number). NOTE: ``ex["input"]`` is a CausalTrace,
@@ -708,13 +765,15 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         per_example_dists = load_tensor_results(
             om_root, "per_example_output_dists.safetensors"
         )["dists"].float()
-        geometry_matrix = _build_transition_dy(
+        edge_min_frac = float(analysis.get("transition_edge_min_frac", 0.0))
+        geometry_matrix, transition_adj = _build_transition_dy(
             task=task,
             train_dataset=train_dataset,
             per_example_dists=per_example_dists,
             W=W,
             transition_variable=transition_variable,
             hold_fixed_vars=transition_hold_fixed,
+            edge_min_frac=edge_min_frac,
         )
         if geometry_matrix is None:
             raise ValueError(
@@ -725,12 +784,34 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         transition_edge_count = int((geometry_matrix.numpy() == 1.0).sum() // 2)
         logger.info(
             "transition d_y built: W=%d, transition_variable=%s, hold_fixed=%s, "
-            "adjacency edges (graph-dist==1 pairs)=%d",
+            "adjacency edges (graph-dist==1 pairs)=%d, edge_min_frac=%.2f",
             W,
             transition_variable,
             transition_hold_fixed,
             transition_edge_count,
+            edge_min_frac,
         )
+
+        # --- Topology-adaptive loss gate -------------------------------------
+        # Classify the DISCOVERED graph (cycle / line / 2-D) and, if enabled, gate
+        # curvature-inducing losses: w_manifold HELPS on non-convex manifolds
+        # (cycle/2-D) but HURTS on a convex line, where straight-line latent
+        # interpolation is already optimal. This is data-derived (from behavioral
+        # transitions), not hand-injected, and lets ONE recipe be optimal across
+        # topologies (weekdays/months cyclic vs alphabet/age linear).
+        discovered_topology = _classify_topology(transition_adj)
+        logger.info("discovered topology: %s", discovered_topology)
+        if bool(analysis.get("adapt_losses_to_topology", False)):
+            if discovered_topology.get("is_convex", False):
+                for wk in ("w_manifold", "w_geodesic"):
+                    if loss_weights.get(wk, 0.0) != 0.0:
+                        logger.info(
+                            "topology=%s (convex) -> gating %s %.3f -> 0.0",
+                            discovered_topology["kind"],
+                            wk,
+                            loss_weights[wk],
+                        )
+                        loss_weights[wk] = 0.0
 
     baseline_dir = os.path.join(root, "baseline")
     baseline_path = os.path.join(baseline_dir, "per_class_output_dists.safetensors")
@@ -1186,6 +1267,10 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             transition_hold_fixed if behavior_geometry == "precomputed" else None
         ),
         "transition_edge_count": transition_edge_count,
+        "discovered_topology": (
+            discovered_topology.get("kind") if discovered_topology else None
+        ),
+        "w_manifold": loss_weights.get("w_manifold", 0.0),
     }
     # Patched behavioral-axis scores (only present when patch_eval=true). Use the
     # SAME keys as the spline so both arms populate the same compare columns.

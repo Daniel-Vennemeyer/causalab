@@ -29,6 +29,13 @@ contrastive_margin: 1.0
 # `number` is an ordinal input we can step through.
 transition_variable: number     # discrete ordinal input variable to step by +1
 transition_hold_fixed: null     # null -> all OTHER input vars (e.g. entity); or an explicit list
+transition_edge_min_frac: 0.0   # denoise the transition graph: drop edges rarer than this
+                                # fraction of each endpoint's dominant transition (0 = keep
+                                # all / backward-compatible; ~0.3 = modal transitions only).
+adapt_losses_to_topology: false # if true, classify the discovered graph (cycle/line/2-D) and
+                                # gate curvature losses (w_manifold/w_geodesic) OFF on a convex
+                                # LINE — they help cyclic manifolds but hurt lines. Lets ONE
+                                # recipe be optimal across topologies (data-derived, not injected).
 train_on_centroids: false
 arm_label: null         # unique per-arm tag for output dir + compare grouping (avoids collisions)
 activation_site: single_final_token
