@@ -369,6 +369,7 @@ def _run_patch_eval(
     comparison_extra: dict[str, Any],
     features: torch.Tensor,
     project_to_data: bool = False,
+    path_builder: Any = None,
 ) -> None:
     """Decode VAE-steered class-centroid-pair paths into the frozen LM and score
     them on the spline's behavioral axes (coherence + distance_from_behavior_manifold).
@@ -435,23 +436,27 @@ def _run_patch_eval(
         belief_manifold, _ = load_output_manifold(root, bm_sub)
 
         # --- Interchange target + composed featurizer (mirror path_steering) -
-        targets, _tp_list = build_targets_for_grid(
-            pipeline, task, [layer], position_names=[token_position]
-        )
-        interchange_target = next(iter(targets.values()))
-
+        # transport (path_builder set) patches ambient PCA points directly via the
+        # subspace featurizer (like project_to_data) and needs NO manifold decode,
+        # so skip the composed (subspace >> manifold) featurizer entirely.
         k_features = ss_meta.get("k_features")
-        load_subspace_onto_target(
-            interchange_target, subspace_out_dir, ss_method, k_features
-        )
-        unit = interchange_target.flatten()[0]
-        subspace_feat = unit.featurizer
-        # n_features is the PCA-subspace dimensionality (the VAE's ambient dim);
-        # the VAE handles its own standardization internally, so no
-        # StandardizeFeaturizer stage is added.
-        manifold_feat = ManifoldFeaturizer(manifold, n_features=int(k_features))
-        composed = subspace_feat >> manifold_feat
-        unit.set_featurizer(composed)
+        interchange_target = None
+        if path_builder is None:
+            targets, _tp_list = build_targets_for_grid(
+                pipeline, task, [layer], position_names=[token_position]
+            )
+            interchange_target = next(iter(targets.values()))
+            load_subspace_onto_target(
+                interchange_target, subspace_out_dir, ss_method, k_features
+            )
+            unit = interchange_target.flatten()[0]
+            subspace_feat = unit.featurizer
+            # n_features is the PCA-subspace dimensionality (the VAE's ambient dim);
+            # the VAE handles its own standardization internally, so no
+            # StandardizeFeaturizer stage is added.
+            manifold_feat = ManifoldFeaturizer(manifold, n_features=int(k_features))
+            composed = subspace_feat >> manifold_feat
+            unit.set_featurizer(composed)
 
         # --- Optional: project-to-data (confirmation test) -------------------
         # Instead of patching the VAE-decoded path point (which may be OFF the
@@ -462,7 +467,7 @@ def _run_patch_eval(
         # the latent ordering — are why VAE steering ≈ linear.
         sub_target = None
         feats_ref = features.detach().float().cpu()
-        if project_to_data:
+        if project_to_data or path_builder is not None:
             targets2, _ = build_targets_for_grid(
                 pipeline, task, [layer], position_names=[token_position]
             )
@@ -512,6 +517,24 @@ def _run_patch_eval(
         else:
             _patch_pairs = _all_pairs
         for (i, j) in tqdm(_patch_pairs, desc=f"patch[{analysis.metric}]: 8B forwards/pair"):
+            if path_builder is not None:
+                # transport: integrate the tangent field from real centroid i to j
+                # in PCA-subspace coords; patch those ambient points via sub_target.
+                patch_grid = path_builder(i, j)
+                probs = collect_grid_distributions(
+                    pipeline=pipeline,
+                    grid_points=patch_grid,
+                    interchange_target=sub_target,
+                    filtered_samples=eval_samples,
+                    var_indices=var_indices,
+                    batch_size=patch_batch_size,
+                    n_base_samples=patch_n_prompts,
+                    average=False,
+                    full_vocab_softmax=True,
+                )
+                pair_dists_list.append(probs)
+                n_pairs_used += 1
+                continue
             if use_geodesic:
                 path = solver.geodesic(
                     U[i],
