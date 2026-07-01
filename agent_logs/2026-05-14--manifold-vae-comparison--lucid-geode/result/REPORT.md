@@ -121,7 +121,17 @@ A learned tangent field `v_θ(h)`, steered by integrating from real centroids (n
 1. **Without an on-data penalty, transport drifts** (dist 1.45, iso 0.48). The field is trained real→real on adjacent classes, so `v_θ(h)` is reliable only *at* real activations; integrating ~25 steps enters *synthetic* intermediate `h` where it extrapolates, and per-step errors compound → off-manifold. Removing the decoder relocated the off-manifold problem rather than removing it.
 2. **With `w_density=1.0`, transport works and beats the decoder VAE** on both axes (dist 1.45→**0.527** < centroid 0.71; iso 0.48→**0.818** > 0.73) — the best non-spline arm. It doesn't reach the spline (0.219), which additionally has a *global parametric manifold* + ground-truth coordinate.
 
-**The key connection:** the fix — `w_density`, penalizing off-data steps — is a discrete form of the paper's **density geometry `G_E`** (Béthune 2025: geodesics cheap where data is dense). So "transport + on-data penalty" ≈ integrating under a density metric, and it is the **decoder-free, parametric-manifold-free** approach — exactly what generalizes to abstract traits (where a decoder and a ground-truth-coordinate spline are both unavailable). The drift result also sharpens *why* it works: on-manifold steering requires either a global manifold structure (spline) or an explicit density force (transport + `w_density`); a bare local field has neither. Open: weekdays transport (discovered clean cycle) still pending.
+**The key connection:** the fix — `w_density`, penalizing off-data steps — is a discrete form of the paper's **density geometry `G_E`** (Béthune 2025: geodesics cheap where data is dense). So "transport + on-data penalty" ≈ integrating under a density metric, and it is the **decoder-free, parametric-manifold-free** approach — exactly what generalizes to abstract traits (where a decoder and a ground-truth-coordinate spline are both unavailable). The drift result also sharpens *why* it works: on-manifold steering requires either a global manifold structure (spline) or an explicit density force (transport + `w_density`); a bare local field has neither.
+
+**Cross-domain transport+density (best non-spline everywhere; distance, 25 steps except where noted):**
+
+| domain | coord | spline | **transport+density** | best VAE | transport isometry |
+|---|---|---|---|---|---|
+| months (cyclic) | **discovered** | 0.192 | **0.324** | 0.338 (adaptive) | **0.964** (best of any arm) |
+| alphabet (line) | ground-truth | 0.219 | **0.527** | 0.713 (centroid) | 0.818 |
+| weekdays (cyclic) | discovered | 0.325* | 0.347† | 0.988 (manifold) | 0.41 |
+
+*weekdays spline/VAE at 50 steps; †weekdays transport at 25 steps — **NOT directly comparable** (distance sums over steps); needs a 50-step transport re-run to confirm. On the two clean (equal-step) domains transport is the best non-spline method: it **ties the best VAE on months (0.324 vs 0.338, fully unsupervised) and beats it on alphabet (0.527 vs 0.713)**, with the **best discovery isometry on months (0.964)**. It still trails the spline (global parametric fit + ground-truth coord) but closes the most of the linear→spline gap of any decoder-free method. Note the arc-length isometry proxy is noisy (weekdays 0.41 despite excellent steering) — steering distance, not this isometry, is the reliable read for transport.
 
 ### TWO reference-manifold bugs on non-cyclic domains (both found + fixed)
 
