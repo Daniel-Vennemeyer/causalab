@@ -8,6 +8,7 @@ from .transport import (
     TransportField,
     discovered_order,
     signed_step,
+    signed_step_vec,
     train_transport,
     integrate_path,
 )
@@ -16,6 +17,7 @@ __all__ = [
     "TransportField",
     "discovered_order",
     "signed_step",
+    "signed_step_vec",
     "train_transport",
     "integrate_path",
 ]

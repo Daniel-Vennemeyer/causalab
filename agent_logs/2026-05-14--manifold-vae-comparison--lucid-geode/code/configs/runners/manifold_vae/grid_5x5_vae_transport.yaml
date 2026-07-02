@@ -1,0 +1,34 @@
+# @package _global_
+# Phase 2: 2-D transport on grid_5x5 (decoder-free tangent field + density force).
+# behavior_geometry=graph -> known node coords + graph-edge neighbors; the field learns
+# a (D x 2) Jacobian (Delta_h = J @ dz) and integrates between node centroids. w_density
+# fights multi-step drift (essential, as on the 1-D lines). Completes the 2-D comparison:
+# spline vs VAE vs transport. Does decoder-free transport match/beat the VAE (0.751) on a
+# 2-D lattice as it did on 1-D lines?
+defaults:
+  - /base
+  - /task: graph_walk_grid_5x5
+  - /model: llama31_8b
+  - /analysis/behavior_manifold_vae
+  - _self_
+
+task:
+  target_variable: node_coordinates
+  n_train: 500   # must match grid_5x5_current_spline (transport loads its cached dataset/features)
+
+behavior_manifold_vae:
+  method: transport
+  topology: unstructured     # unused by transport
+  metric: latent_linear      # unused (path_builder supplies the path)
+  latent_dim: 2
+  n_charts: 1
+  layers: [28]
+  token_positions: [last]
+  behavior_geometry: graph   # 2-D known-graph coordinate + adjacency
+  transport_w_density: 1.0   # on-data force (required; 1-D lines needed it: 1.45->0.53)
+  patch_eval: true
+  patch_num_steps: 20
+  patch_n_prompts: 5
+  patch_batch_size: 4        # long ICLR prompts
+  device: cpu
+  arm_label: transport

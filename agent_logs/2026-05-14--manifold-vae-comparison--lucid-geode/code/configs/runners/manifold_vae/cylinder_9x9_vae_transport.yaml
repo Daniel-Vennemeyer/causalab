@@ -1,0 +1,32 @@
+# @package _global_
+# Phase 2: 2-D transport on cylinder_9x9 (one PERIODIC dimension). Same as grid but the
+# graph carries a periodic angle -> integrate_path uses per-dim periodic shortest-arc on
+# that axis (from _graph.periodic_dims). Tests decoder-free transport on a mixed
+# periodic+linear 2-D manifold.
+defaults:
+  - /base
+  - /task: graph_walk_cylinder_9x9
+  - /model: llama31_8b
+  - /analysis/behavior_manifold_vae
+  - _self_
+
+task:
+  target_variable: node_coordinates
+  n_train: 810   # must match cylinder_9x9_current_spline
+
+behavior_manifold_vae:
+  method: transport
+  topology: unstructured
+  metric: latent_linear
+  latent_dim: 2
+  n_charts: 1
+  layers: [28]
+  token_positions: [last]
+  behavior_geometry: graph
+  transport_w_density: 1.0
+  patch_eval: true
+  patch_num_steps: 20
+  patch_n_prompts: 5
+  patch_batch_size: 4
+  device: cpu
+  arm_label: transport

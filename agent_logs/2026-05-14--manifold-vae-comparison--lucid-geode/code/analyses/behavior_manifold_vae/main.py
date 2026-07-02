@@ -907,68 +907,108 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         # isolates the transport MECHANISM from discovery noise. Use ground-truth
         # only where the discovered graph is too noisy for a 1-D chain (e.g. alphabet:
         # sparse 2-increment stepping + model errors give a hubbed, max_deg-7 graph).
-        _use_gt = bool(analysis.get("transport_use_ground_truth_coord", False))
-        _coord_source = "ground_truth" if _use_gt else "discovered"
-        present_classes = [c for c in range(W) if bool((cls_idx == c).any())]
-        if _use_gt:
-            _emb = (task.causal_model.embeddings or {}).get("result")
-            _vals = task.intervention_values
-            _periods = task.causal_model.periods or {}
-            periodic = "result" in _periods
-            _coords = {
-                c: (float(_emb(_vals[c])[0]) if _emb else float(c)) for c in present_classes
-            }
-            present_classes.sort(key=lambda c: _coords[c])
-            rank = np.full(W, -1, dtype=np.int64)
-            for pos, c in enumerate(present_classes):
-                rank[c] = pos
+        if behavior_geometry == "graph":
+            # 2-D graph transport: coords = KNOWN node coordinates, neighbors = graph
+            # edges, per-dim periodicity from the graph. Field learns a (D x d) Jacobian
+            # (Delta_h = J @ dz) -> factored per-axis control.
+            _graph = getattr(task.causal_model, "_graph", None)
+            if _graph is None or transition_adj is None:
+                raise ValueError("graph transport requires a task graph + behavior_geometry=graph.")
+            present_classes = [c for c in range(W) if bool((cls_idx == c).any())]
+            coords_full = np.array(
+                [list(_graph.coordinates[c]) for c in range(W)], dtype=np.float64
+            )  # (W, d)
+            periods = np.zeros(coords_full.shape[1])
+            for _dim, _p in (getattr(_graph, "periodic_dims", {}) or {}).items():
+                if int(_dim) < periods.shape[0]:
+                    periods[int(_dim)] = float(_p)
+            periodic = bool((periods > 0).any())
+            n_ranks = len(present_classes)
+            U_amb = torch.stack(
+                [features[cls_idx == c].mean(dim=0) for c in present_classes], dim=0
+            )
+            logger.info(
+                "graph transport: d=%d periods=%s present=%d",
+                coords_full.shape[1], periods.tolist(), n_ranks,
+            )
+            field, tinfo = train_transport(
+                features=features, cls_idx=cls_idx, ranks=coords_full, periodic=False, W=W,
+                adjacency=transition_adj, periods=periods,
+                hidden_dims=list(analysis.hidden_dims), epochs=int(analysis.epochs),
+                lr=float(analysis.lr), w_density=float(analysis.get("transport_w_density", 0.0)),
+                seed=int(cfg.seed), device=device,
+            )
+            logger.info("transport trained: %s", tinfo)
+            _cf = coords_full
+
+            def _transport_path(i: int, j: int) -> torch.Tensor:
+                return integrate_path(
+                    field, U_amb[i].to(device), _cf[present_classes[i]], _cf[present_classes[j]],
+                    n_steps=int(analysis.patch_num_steps), periods=periods,
+                ).detach().cpu().float()
         else:
-            if transition_adj is None:
-                raise ValueError("transport requires behavior_geometry=precomputed (transition graph).")
-            _ord = discovered_order(transition_adj)
-            if _ord is None:
-                raise ValueError(
-                    "transport: discovered graph is not a 1-D chain (branched/2-D); "
-                    "set transport_use_ground_truth_coord=true to test the mechanism, "
-                    "or use the atlas (future work). "
-                    f"discovered_topology={discovered_topology}"
-                )
-            rank, periodic = _ord
-            present_classes = [c for c in present_classes if rank[c] >= 0]
-            present_classes.sort(key=lambda c: int(rank[c]))
-        n_ranks = len(present_classes)
-        logger.info("transport coordinate: source=%s periodic=%s n_ranks=%d", _coord_source, periodic, n_ranks)
-        U_amb = torch.stack(
-            [features[cls_idx == c].mean(dim=0) for c in present_classes], dim=0
-        )  # (Wp, k) real per-class centroids
-        z_present = np.array([float(rank[c]) for c in present_classes])
+            _use_gt = bool(analysis.get("transport_use_ground_truth_coord", False))
+            _coord_source = "ground_truth" if _use_gt else "discovered"
+            present_classes = [c for c in range(W) if bool((cls_idx == c).any())]
+            if _use_gt:
+                _emb = (task.causal_model.embeddings or {}).get("result")
+                _vals = task.intervention_values
+                _periods = task.causal_model.periods or {}
+                periodic = "result" in _periods
+                _coords = {
+                    c: (float(_emb(_vals[c])[0]) if _emb else float(c)) for c in present_classes
+                }
+                present_classes.sort(key=lambda c: _coords[c])
+                rank = np.full(W, -1, dtype=np.int64)
+                for pos, c in enumerate(present_classes):
+                    rank[c] = pos
+            else:
+                if transition_adj is None:
+                    raise ValueError("transport requires behavior_geometry=precomputed (transition graph).")
+                _ord = discovered_order(transition_adj)
+                if _ord is None:
+                    raise ValueError(
+                        "transport: discovered graph is not a 1-D chain (branched/2-D); "
+                        "set transport_use_ground_truth_coord=true to test the mechanism, "
+                        "or use the atlas (future work). "
+                        f"discovered_topology={discovered_topology}"
+                    )
+                rank, periodic = _ord
+                present_classes = [c for c in present_classes if rank[c] >= 0]
+                present_classes.sort(key=lambda c: int(rank[c]))
+            n_ranks = len(present_classes)
+            logger.info("transport coordinate: source=%s periodic=%s n_ranks=%d", _coord_source, periodic, n_ranks)
+            U_amb = torch.stack(
+                [features[cls_idx == c].mean(dim=0) for c in present_classes], dim=0
+            )  # (Wp, k) real per-class centroids
+            z_present = np.array([float(rank[c]) for c in present_classes])
 
-        field, tinfo = train_transport(
-            features=features,
-            cls_idx=cls_idx,
-            ranks=rank,
-            periodic=periodic,
-            W=W,
-            hidden_dims=list(analysis.hidden_dims),
-            epochs=int(analysis.epochs),
-            lr=float(analysis.lr),
-            neighbor_radius=int(analysis.get("transport_neighbor_radius", 1)),
-            w_density=float(analysis.get("transport_w_density", 0.0)),
-            seed=int(cfg.seed),
-            device=device,
-        )
-        logger.info("transport trained: %s (periodic=%s, n_ranks=%d)", tinfo, periodic, n_ranks)
-
-        def _transport_path(i: int, j: int) -> torch.Tensor:
-            return integrate_path(
-                field,
-                U_amb[i].to(device),
-                float(z_present[i]),
-                float(z_present[j]),
-                n_steps=int(analysis.patch_num_steps),
+            field, tinfo = train_transport(
+                features=features,
+                cls_idx=cls_idx,
+                ranks=rank,
                 periodic=periodic,
-                period=float(n_ranks),
-            ).detach().cpu().float()
+                W=W,
+                hidden_dims=list(analysis.hidden_dims),
+                epochs=int(analysis.epochs),
+                lr=float(analysis.lr),
+                neighbor_radius=int(analysis.get("transport_neighbor_radius", 1)),
+                w_density=float(analysis.get("transport_w_density", 0.0)),
+                seed=int(cfg.seed),
+                device=device,
+            )
+            logger.info("transport trained: %s (periodic=%s, n_ranks=%d)", tinfo, periodic, n_ranks)
+
+            def _transport_path(i: int, j: int) -> torch.Tensor:
+                return integrate_path(
+                    field,
+                    U_amb[i].to(device),
+                    float(z_present[i]),
+                    float(z_present[j]),
+                    n_steps=int(analysis.patch_num_steps),
+                    periodic=periodic,
+                    period=float(n_ranks),
+                ).detach().cpu().float()
 
         metrics_t: dict[str, Any] = {
             "reconstruction": None,

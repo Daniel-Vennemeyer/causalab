@@ -111,23 +111,38 @@ def signed_step(z_from: float, z_to: float, periodic: bool, period: float) -> fl
     return d
 
 
+def signed_step_vec(z_from: np.ndarray, z_to: np.ndarray, periods: np.ndarray) -> np.ndarray:
+    """Per-dimension signed displacement, periodic shortest-arc where periods[d] > 0
+    (0 = non-periodic dim). ``z_from``/``z_to`` are (d,); ``periods`` is (d,)."""
+    d = np.asarray(z_to, dtype=np.float64) - np.asarray(z_from, dtype=np.float64)
+    periods = np.asarray(periods, dtype=np.float64)
+    for i, p in enumerate(periods):
+        if p > 0:
+            d[i] = (d[i] + p / 2.0) % p - p / 2.0
+    return d
+
+
 # ---------------------------------------------------------------------------
 # Tangent vector field
 # ---------------------------------------------------------------------------
 class TransportField(nn.Module):
-    """MLP tangent field ``v_theta(h): R^D -> R^D``. Inputs are standardized with
-    stored (mean, std); the predicted delta is returned in the RAW ``h`` space so
-    integrated paths live in the same PCA-subspace coordinates the patcher expects.
+    """MLP tangent field. For a d-dimensional behavioral coordinate it outputs a
+    ``(D x d)`` Jacobian per point; a behavioral step ``dz`` (d,) maps to an activation
+    step ``Delta_h = J(h) @ dz`` (D,). d=1 reduces to a single tangent direction (the
+    validated 1-D transport). Inputs standardized with stored (mean, std); deltas are in
+    RAW ``h`` space so integrated paths live in the PCA coords the patcher expects.
     """
 
-    def __init__(self, dim: int, hidden_dims: List[int]):
+    def __init__(self, dim: int, hidden_dims: List[int], intrinsic_dim: int = 1):
         super().__init__()
+        self.dim = dim
+        self.intrinsic_dim = intrinsic_dim
         layers: List[nn.Module] = []
         d = dim
         for h in hidden_dims:
             layers += [nn.Linear(d, h), nn.GELU()]
             d = h
-        layers += [nn.Linear(d, dim)]
+        layers += [nn.Linear(d, dim * intrinsic_dim)]
         self.net = nn.Sequential(*layers)
         self.register_buffer("mean", torch.zeros(dim))
         self.register_buffer("std", torch.ones(dim))
@@ -136,8 +151,14 @@ class TransportField(nn.Module):
         self.mean.copy_(mean)
         self.std.copy_(std.clamp(min=1e-6))
 
-    def forward(self, h: torch.Tensor) -> torch.Tensor:
-        return self.net((h - self.mean) / self.std)
+    def jacobian(self, h: torch.Tensor) -> torch.Tensor:
+        """(B, dim, intrinsic_dim) tangent Jacobian at each point."""
+        out = self.net((h - self.mean) / self.std)
+        return out.view(h.shape[0], self.dim, self.intrinsic_dim)
+
+    def step(self, h: torch.Tensor, dz: torch.Tensor) -> torch.Tensor:
+        """Activation step for a behavioral step ``dz`` (B, intrinsic_dim) -> (B, dim)."""
+        return (self.jacobian(h) * dz.unsqueeze(1)).sum(dim=-1)
 
 
 def _neighbor_pairs(
@@ -166,13 +187,39 @@ def _neighbor_pairs(
     return np.array(ii), np.array(jj), np.array(dz, dtype=np.float64)
 
 
+def _graph_neighbor_pairs(
+    coords: np.ndarray, cls_idx: np.ndarray, adjacency: np.ndarray, periods: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(i, j, dz) example pairs for GRAPH-adjacent classes (d-dimensional ``dz`` =
+    per-dim signed coord difference). ``coords`` is (W, d); ``adjacency`` is (W, W) 0/1."""
+    W = coords.shape[0]
+    by_class: dict[int, list] = {}
+    for ex_i, c in enumerate(cls_idx.tolist()):
+        by_class.setdefault(int(c), []).append(ex_i)
+    ii, jj, dz = [], [], []
+    for a in range(W):
+        for b in range(W):
+            if a >= b or adjacency[a, b] <= 0:
+                continue
+            if a not in by_class or b not in by_class:
+                continue
+            d_ab = signed_step_vec(coords[a], coords[b], periods)
+            for ea in by_class[a]:
+                for eb in by_class[b]:
+                    ii.append(ea); jj.append(eb); dz.append(d_ab)
+                    ii.append(eb); jj.append(ea); dz.append(-d_ab)
+    return np.array(ii), np.array(jj), np.array(dz, dtype=np.float64)
+
+
 def train_transport(
     features: torch.Tensor,          # (N, D) PCA-subspace activations
     cls_idx: torch.Tensor,           # (N,) class index per example
-    ranks: np.ndarray,               # (W,) discovered rank per class (-1 absent)
+    ranks: np.ndarray,               # (W,) 1-D rank OR (W, d) coordinate per class
     periodic: bool,
     *,
     W: int,
+    adjacency: np.ndarray | None = None,  # (W,W) 0/1 -> graph-neighbor pairs (d-dim mode)
+    periods: np.ndarray | None = None,    # (d,) per-dim periods (0 = non-periodic); d-dim mode
     hidden_dims: List[int] = (256, 256),
     epochs: int = 300,
     lr: float = 1e-3,
@@ -182,21 +229,34 @@ def train_transport(
     seed: int = 0,
     device: str = "cpu",
 ) -> Tuple[TransportField, dict]:
-    """Fit the tangent field real->real over near-in-behavior example pairs."""
+    """Fit the tangent field real->real over near-in-behavior pairs. 1-D (rank + radius)
+    when ``adjacency`` is None; d-dimensional (graph-adjacent, ``coords``+``adjacency``)
+    otherwise. Field learns a (D x d) Jacobian; step = J @ dz."""
     g = torch.Generator().manual_seed(seed)
     torch.manual_seed(seed)
     dev = torch.device(device)
     feats = features.to(dev).float()
     D = feats.shape[1]
-    field = TransportField(D, list(hidden_dims)).to(dev)
+    coords = np.asarray(ranks, dtype=np.float64)
+    if coords.ndim == 1:
+        coords = coords[:, None]
+    kdim = coords.shape[1]
+    field = TransportField(D, list(hidden_dims), intrinsic_dim=kdim).to(dev)
     field.set_normalization(feats.mean(0), feats.std(0))
 
-    ii, jj, dz = _neighbor_pairs(ranks, cls_idx.cpu().numpy(), periodic, W, neighbor_radius)
+    cls_np = cls_idx.cpu().numpy()
+    if adjacency is not None:
+        if periods is None:
+            periods = np.zeros(kdim)
+        ii, jj, dz = _graph_neighbor_pairs(coords, cls_np, adjacency, periods)  # dz (n, d)
+    else:
+        ii, jj, dz1 = _neighbor_pairs(ranks, cls_np, periodic, W, neighbor_radius)
+        dz = dz1[:, None]                                                       # (n, 1)
     if ii.size == 0:
-        raise ValueError("transport: no neighbor pairs; check discovered ranks.")
+        raise ValueError("transport: no neighbor pairs; check coords/adjacency.")
     ii_t = torch.from_numpy(ii).long()
     jj_t = torch.from_numpy(jj).long()
-    dz_t = torch.from_numpy(dz).float().to(dev)
+    dz_t = torch.from_numpy(dz).float().to(dev)                                 # (n, d)
 
     opt = torch.optim.Adam(field.parameters(), lr=lr)
     n = ii.size
@@ -209,8 +269,7 @@ def train_transport(
             idx = perm[s : s + batch_size]
             hi = feats[ii_t[idx]]
             hj = feats[jj_t[idx]]
-            d = dz_t[idx].unsqueeze(1)
-            pred = d * field(hi)                       # (B, D) transport step
+            pred = field.step(hi, dz_t[idx])           # (B, D) via J @ dz
             loss = ((pred - (hj - hi)) ** 2).sum(-1).mean()
             if w_density > 0.0:
                 stepped = hi + pred
@@ -222,27 +281,36 @@ def train_transport(
             ep += float(loss.detach())
             nb += 1
         history.append(ep / max(1, nb))
-    return field, {"final_loss": history[-1] if history else None, "n_pairs": int(n)}
+    return field, {"final_loss": history[-1] if history else None,
+                   "n_pairs": int(n), "intrinsic_dim": int(kdim)}
 
 
 @torch.no_grad()
 def integrate_path(
     field: TransportField,
     c_from: torch.Tensor,    # (D,) start activation (real centroid)
-    z_from: float,
-    z_to: float,
+    z_from,                  # scalar (1-D) or (d,) array
+    z_to,
     *,
     n_steps: int,
-    periodic: bool,
-    period: float,
+    periodic: bool = False,
+    period: float | None = None,
+    periods: np.ndarray | None = None,   # (d,) per-dim periods (0=non-periodic); d-dim mode
 ) -> torch.Tensor:
-    """Integrate the field from ``c_from`` toward the behavior coordinate ``z_to``.
-    Returns an ``(n_steps, D)`` activation path in PCA-subspace coordinates."""
-    dz_total = signed_step(z_from, z_to, periodic, period)
-    step = dz_total / float(n_steps)
+    """Integrate the field from ``c_from`` toward ``z_to``. Returns (n_steps, D). Scalar
+    z / ``period`` for the 1-D case; array z / ``periods`` for d-dim."""
+    z_from = np.atleast_1d(np.asarray(z_from, dtype=np.float64))
+    z_to = np.atleast_1d(np.asarray(z_to, dtype=np.float64))
+    k = z_from.shape[0]
+    if periods is None:
+        p = float(period) if (periodic and period) else 0.0
+        periods = np.array([p] * k)
+    dz_total = signed_step_vec(z_from, z_to, periods)          # (d,)
+    step = torch.tensor(dz_total / float(n_steps), dtype=torch.float32,
+                        device=c_from.device).unsqueeze(0)      # (1, d)
     h = c_from.clone().float()
     path = [h.clone()]
     for _ in range(n_steps - 1):
-        h = h + step * field(h.unsqueeze(0)).squeeze(0)
+        h = h + field.step(h.unsqueeze(0), step).squeeze(0)
         path.append(h.clone())
     return torch.stack(path, dim=0)

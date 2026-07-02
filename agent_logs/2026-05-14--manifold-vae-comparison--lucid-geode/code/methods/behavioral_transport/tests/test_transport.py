@@ -125,6 +125,47 @@ def test_train_transport_learns_a_line():
     assert abs(moved[1]) < 0.6 and abs(moved[2]) < 0.6, f"drifted off-axis: {moved}"
 
 
+def test_train_transport_2d_plane_and_factored_control():
+    # 2-D grid: activation = [row, col, 0] + noise; graph = 4-connected. The field
+    # should learn a Jacobian s.t. moving one coordinate moves that axis only.
+    torch.manual_seed(0)
+    rng = np.random.default_rng(0)
+    R = C = 4
+    per = 20
+    node = lambda r, c: r * C + c
+    coords, feats, cls = [], [], []
+    for r in range(R):
+        for c in range(C):
+            coords.append([float(r), float(c)])
+            feats.append(np.array([r, c, 0.0]) + 0.02 * rng.standard_normal((per, 3)))
+            cls += [node(r, c)] * per
+    coords = np.array(coords)
+    features = torch.tensor(np.concatenate(feats), dtype=torch.float32)
+    cls_idx = torch.tensor(cls, dtype=torch.long)
+    W = R * C
+    A = np.zeros((W, W))
+    for r in range(R):
+        for c in range(C):
+            if c + 1 < C:
+                A[node(r, c), node(r, c + 1)] = A[node(r, c + 1), node(r, c)] = 1
+            if r + 1 < R:
+                A[node(r, c), node(r + 1, c)] = A[node(r + 1, c), node(r, c)] = 1
+    field, info = train_transport(
+        features, cls_idx, coords, periodic=False, W=W, adjacency=A,
+        periods=np.array([0.0, 0.0]), hidden_dims=[64, 64], epochs=250, seed=0,
+    )
+    assert info["intrinsic_dim"] == 2 and info["n_pairs"] > 0
+    c00 = features[cls_idx == node(0, 0)].mean(0)
+    # move +row -> x rises ~3, col/z ~0 (factored)
+    p_row = integrate_path(field, c00, [0.0, 0.0], [3.0, 0.0], n_steps=25, periods=np.array([0.0, 0.0]))
+    m = (p_row[-1] - p_row[0]).numpy()
+    assert m[0] > 2.0 and abs(m[1]) < 0.7 and abs(m[2]) < 0.7, m
+    # move +col -> y rises ~3, row ~0 (factored control)
+    p_col = integrate_path(field, c00, [0.0, 0.0], [0.0, 3.0], n_steps=25, periods=np.array([0.0, 0.0]))
+    m2 = (p_col[-1] - p_col[0]).numpy()
+    assert m2[1] > 2.0 and abs(m2[0]) < 0.7, m2
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
