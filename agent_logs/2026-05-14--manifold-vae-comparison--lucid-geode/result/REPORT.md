@@ -146,6 +146,23 @@ The non-cyclic domains had two *separate* bugs in the reference manifolds (not t
 
 Both fixes apply only to the non-cyclic domains; **weekdays/months (cyclic) use the PCA `atan2` coordinate, which is already the paper's cyclic protocol and was correct** (months re-confirmed under parameter mode). All pre-fix alphabet/age numbers were invalid; every alphabet figure above is post-fix.
 
+## PHASE 2: 2-D topology (ICLR graph_walk)
+
+Extended the comparison to the genuinely 2-D `graph_walk` tasks. `d_y` is the
+shortest-path distance on the model's **known graph** (`_build_graph_dy`; no ordinal to
+step), the VAE uses a 2-D **unstructured** latent, and steering/isometry reuse the
+dim-agnostic machinery. First result — **grid_5x5** (W=25, 4-connected lattice = 40 edges,
+classified `complex` → `w_manifold` kept; 20 steps, 3 seeds):
+
+| grid_5x5 | isometry | coherence | distance ↓ |
+|---|---|---|---|
+| spline geometric | 0.989 | 0.966 | 0.404 |
+| **VAE (graph d_y, 2-D unstructured)** | **0.968 ± .003** | 0.967 | 0.751 ± .02 |
+
+- **Discovery generalizes to 2-D:** VAE isometry **0.968 ≈ spline 0.989** (Δ ≈ −0.02), recovering the grid from graph-distance `d_y` in a 2-D latent — matches the paper's grid isometry (~0.99).
+- **Steering** shows the same pattern as 1-D: VAE (0.751) approximates the spline (0.404, ~1.9×) with matched coherence (0.967 ≈ 0.966). Linear baseline + cylinder_9x9 (W=81, periodic) pending.
+- **New code validated end-to-end:** `_build_graph_dy` + topology classification + 2-D VAE + graph patch eval all work; the `last_token`→`last` and long-prompt-batch/`n_train` fixes cleared the pipeline.
+
 ## Final summary: fit → discover → steer
 
 | question | answer |
