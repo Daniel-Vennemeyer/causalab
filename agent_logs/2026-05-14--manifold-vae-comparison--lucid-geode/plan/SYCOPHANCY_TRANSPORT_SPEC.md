@@ -114,4 +114,15 @@ linear — demonstrating geometry-aware steering on a social behavior with a **s
 - **cycle_rate 0.162** (> 0.10 → FAIL) — real but mild intransitivity (random ≈ 0.25, clean 1-D ≈ 0).
 - **tau vs system-level spectrum 0.500** — the model doesn't treat our 6 nudging levels as a monotonic sycophancy scale.
 - **Verdict: NOT clean 1-D.** A reliable judge that still can't totally-order sycophancy ⇒ distinct modes (flattery / excessive agreement / false deference / warmth) that aren't comparable on one axis — reproducing "sycophancy is not one thing" from the model's own judgments. Do NOT build 1-D transport on this coordinate.
-- **Leading cause (testable):** the 6 system levels conflate modes, so cross-mode comparisons are ambiguous → cycles + low tau. **Next: narrow the judge + generation to a SINGLE mode (e.g. excessive agreement with the user's claim) and re-run Gate A.** If a single mode is cleanly 1-D → atlas = per-mode 1-D transport (reuse existing transport). If single modes are still intransitive → genuine multi-dim, needs a 2-D+ coordinate (MDS on the preference matrix to estimate intrinsic dim).
+- **Leading cause (testable):** the 6 system levels conflate modes, so cross-mode comparisons are ambiguous → cycles + low tau. **Next: narrow the judge + generation to a SINGLE mode and re-run Gate A.**
+
+## GATE A — RESULT #2: PRAISE (single mode) — PASSES ✅
+Narrowing to **praise intensity** (`--concept praise`: levels vary praise harsh→effusive, judge = "which gives more praise/flattery?") makes it cleanly 1-D — every metric improved vs general sycophancy:
+
+| metric | sycophancy | praise | gate |
+|---|---|---|---|
+| agreement | 0.815 | **0.912** | ≥0.70 ✓ |
+| cycle_rate | 0.162 | **0.059** | ≤0.10 ✓ |
+| tau vs levels | 0.500 | **0.717** | — |
+
+**Verdict: consistent 1-D order → proceed to Gate B.** Confirms the decomposition: sycophancy is multi-mode ("not one thing"), but a SINGLE mode (praise) is a clean 1-D axis. ⇒ atlas = per-mode 1-D transport; **praise is the first chart**. Next: **Gate B (isometry)** — collect activations over the praise-ranked responses (already generated in `responses.json`), bin by praise rank, and test whether the praise axis is a steerable *activation* direction (D_X vs ranking). If Gate B passes → 1-D transport on praise (reuse the validated 1-D pipeline) with eval-time covariates.
