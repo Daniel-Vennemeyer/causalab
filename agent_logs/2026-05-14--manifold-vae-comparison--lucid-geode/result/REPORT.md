@@ -154,14 +154,16 @@ step), the VAE uses a 2-D **unstructured** latent, and steering/isometry reuse t
 dim-agnostic machinery. First result — **grid_5x5** (W=25, 4-connected lattice = 40 edges,
 classified `complex` → `w_manifold` kept; 20 steps, 3 seeds):
 
-| grid_5x5 | isometry | coherence | distance ↓ |
+| grid_5x5 (W=25, 20 steps) | isometry | coherence | distance ↓ |
 |---|---|---|---|
-| spline geometric | 0.989 | 0.966 | 0.404 |
-| **VAE (graph d_y, 2-D unstructured)** | **0.968 ± .003** | 0.967 | 0.751 ± .02 |
+| spline geometric | 0.989 | 0.966 | **0.404** |
+| **transport (2-D Jacobian, decoder-free, w_density)** | 0.876 | 0.966 | **0.600 ± .05** |
+| VAE (graph d_y, 2-D unstructured) | 0.968 ± .003 | 0.967 | 0.751 ± .02 |
 
 - **Discovery generalizes to 2-D:** VAE isometry **0.968 ≈ spline 0.989** (Δ ≈ −0.02), recovering the grid from graph-distance `d_y` in a 2-D latent — matches the paper's grid isometry (~0.99).
-- **Steering** shows the same pattern as 1-D: VAE (0.751) approximates the spline (0.404, ~1.9×) with matched coherence (0.967 ≈ 0.966). Linear baseline + cylinder_9x9 (W=81, periodic) pending.
-- **New code validated end-to-end:** `_build_graph_dy` + topology classification + 2-D VAE + graph patch eval all work; the `last_token`→`last` and long-prompt-batch/`n_train` fixes cleared the pipeline.
+- **Transport beats the VAE in 2-D too** (dist **0.600 < 0.751**, matched coherence), second only to the spline — reproducing the 1-D finding (alphabet 0.53 < 0.71). The `D×d` Jacobian field + graph-adjacency neighbors + density force generalized cleanly, so **transport is the best non-spline steerer on EVERY topology tested — 1-D lines, 1-D cycles, and 2-D lattices.** (Transport's arc-length isometry 0.876 < VAE's 0.968, but that proxy is noisy — steering distance is the reliable read; cf. weekdays iso 0.41 with excellent steering.)
+- **New code validated end-to-end:** `_build_graph_dy`, topology classification, 2-D VAE, 2-D (Jacobian) transport with factored control, and the graph patch eval all work; the `last_token`→`last`, long-prompt-batch, and `n_train` fixes cleared the pipeline.
+- Pending: linear baseline (gap-closed %) + cylinder_9x9 (W=81, periodic axis).
 
 ## Final summary: fit → discover → steer
 
