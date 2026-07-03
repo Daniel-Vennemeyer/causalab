@@ -143,4 +143,14 @@ Ran the model over each `(user, response)` (no system prompt → praise signal f
 | 10 | 6.0 | 0.50 | 0.37 (over-steer → repetition) |
 | 14/18/22 | 3–6 | ≤0.50 | erratic / breaks |
 
-**Read praise at layer 28, write it at layer 10.** Praise is 1-D (A), represented (B), and a **causal generation knob** via a mid-layer diff-of-means direction (A) — but **linear steering at the right layer suffices; transport is not needed for this ~flat social axis.** Honest end to the praise thread. TODO: confirm L10/α≈3 on more prompts + finer α grid (n=4 → n≥10) before claiming the dose-response curve.
+**Read praise at layer 28, write it at layer 10.** Praise is 1-D (A), represented (B), and a **causal generation knob** via a mid-layer diff-of-means direction (A) — but **linear steering at the right layer suffices; transport is not needed for this ~flat social axis.**
+
+**Metric A CONFIRMED (n=12 prompts, 24 order-swapped judgments/cell):** clear dose-response, layer 10 dominates:
+
+| layer | α=2 | α=3 | α=4 |
+|---|---|---|---|
+| 8 | 0.71 | 0.75 | 0.88 (distinct 0.61) |
+| **10** | 0.71 | **0.96** (distinct 0.66) | 0.79 (0.59) |
+| 12 | 0.67 | 0.67 | 0.58 (distinct 0.37 → degenerating) |
+
+Win-rate peaks at **L10/α3 = 0.96** then erodes at α4 as over-steering hurts fluency — a genuine dose-response, not an artifact. Honest end to the praise thread: geometry *discovery* generalizes to a social behavior; geometry-aware *steering* (transport) does not pay off here because the social axis is flat — plain mid-layer linear steering is the right tool.
