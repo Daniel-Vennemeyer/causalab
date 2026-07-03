@@ -125,4 +125,22 @@ Narrowing to **praise intensity** (`--concept praise`: levels vary praise harsh�
 | cycle_rate | 0.162 | **0.059** | ≤0.10 ✓ |
 | tau vs levels | 0.500 | **0.717** | — |
 
-**Verdict: consistent 1-D order → proceed to Gate B.** Confirms the decomposition: sycophancy is multi-mode ("not one thing"), but a SINGLE mode (praise) is a clean 1-D axis. ⇒ atlas = per-mode 1-D transport; **praise is the first chart**. Next: **Gate B (isometry)** — collect activations over the praise-ranked responses (already generated in `responses.json`), bin by praise rank, and test whether the praise axis is a steerable *activation* direction (D_X vs ranking). If Gate B passes → 1-D transport on praise (reuse the validated 1-D pipeline) with eval-time covariates.
+**Verdict: consistent 1-D order → proceed to Gate B.** Confirms the decomposition: sycophancy is multi-mode ("not one thing"), but a SINGLE mode (praise) is a clean 1-D axis. ⇒ atlas = per-mode 1-D transport; **praise is the first chart**.
+
+## GATE B — RESULT: PRAISE — PASSES ✅ (isometry)
+Ran the model over each `(user, response)` (no system prompt → praise signal from content), mean-pooled the response-token hidden at **layer 28**, PCA-64, binned by level, correlated activation-centroid distance vs praise-level distance:
+- **isometry r = 0.685** (≥0.5 ✓) — the praise axis is a genuine ordered activation direction.
+- **PC1-vs-level corr = 0.864** — a single dominant monotone axis. Strong green light.
+
+## GATE T + E1 — RESULT: PRAISE
+**Metric B (on-manifold, transport vs linear): NO transport advantage — ratio 1.08.** Off-manifold distances are large (transport 7.75 / linear 7.16) because within-level scatter ≫ between-level centroid gaps: at 6 coarse levels the praise manifold is **~flat**, so the straight chord is as on-manifold as the field path. Same lesson as the alphabet arm: **flat ⇒ linear ≈ geodesic; transport's benefit is reserved for curved geometric manifolds.** (6 points cannot express curvature — not a bug.)
+
+**Metric A (behavioral steerability): PASSES, but only at the right WRITE layer.** ActAdd at the read-layer (28) did nothing (win-rate ~0.5 flat over α=0–2; late layer, huge residual norms → negligible delta). A write-layer sweep found the true knob:
+
+| write-layer | α | praise win-rate | distinct-tok |
+|---|---|---|---|
+| **10** | **3.0** | **1.00** | 0.64 (base 0.69) ✓ |
+| 10 | 6.0 | 0.50 | 0.37 (over-steer → repetition) |
+| 14/18/22 | 3–6 | ≤0.50 | erratic / breaks |
+
+**Read praise at layer 28, write it at layer 10.** Praise is 1-D (A), represented (B), and a **causal generation knob** via a mid-layer diff-of-means direction (A) — but **linear steering at the right layer suffices; transport is not needed for this ~flat social axis.** Honest end to the praise thread. TODO: confirm L10/α≈3 on more prompts + finer α grid (n=4 → n≥10) before claiming the dose-response curve.
