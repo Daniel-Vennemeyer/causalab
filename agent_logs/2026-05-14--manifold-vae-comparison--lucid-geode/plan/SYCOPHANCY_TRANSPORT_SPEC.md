@@ -133,7 +133,21 @@ Ran the model over each `(user, response)` (no system prompt → praise signal f
 - **PC1-vs-level corr = 0.864** — a single dominant monotone axis. Strong green light.
 
 ## GATE T + E1 — RESULT: PRAISE
-**Metric B (on-manifold, transport vs linear): NO transport advantage — ratio 1.08.** Off-manifold distances are large (transport 7.75 / linear 7.16) because within-level scatter ≫ between-level centroid gaps: at 6 coarse levels the praise manifold is **~flat**, so the straight chord is as on-manifold as the field path. Same lesson as the alphabet arm: **flat ⇒ linear ≈ geodesic; transport's benefit is reserved for curved geometric manifolds.** (6 points cannot express curvature — not a bug.)
+**Metric B (on-manifold, transport vs linear): NO advantage AS FIRST MEASURED — ratio 1.08. ⚠️ RETRACTED — this was a topic-variance artifact (see correction below).** Off-manifold distances were large (7.75 / 7.16) because within-level scatter ≫ between-level gaps — but the reason turned out to be **topic**, not flatness.
+
+### Metric B — CONFOUND CHECK + CORRECTION (praise is strongly CURVED)
+Prompted by the surprise that a social behavior would be flat, a **geometry probe** (field-free, `praise_geometry_probe.py`) decomposed variance and measured curvature across layers:
+- **Topic swamps praise ~3.7×:** `var_topic` 0.52–0.58 vs `var_level` 0.14–0.16 at every layer. The original Metric B measured off-manifold distance to the whole (topic-dominated) response cloud → both paths equidistant from a fat blob → spurious tie.
+- **Praise is heavily curved:** arc/chord = **2.0–2.3 global, 3.0–3.5 within-topic** (translation-invariant, so topic offset cancels), PC1 only ~0.73. Far more curved than the sequential/cyclic geometric tasks — as expected for a complex social behavior.
+
+**Corrected Metric B** (`praise_transport_within.py`, topic-controlled = subtract each prompt's mean, isolating the shared curved ribbon):
+
+| layer | raw lin/transport | topic-controlled lin/transport |
+|---|---|---|
+| 10 | 0.94 (artifact) | **1.18** |
+| 28 | 0.90 (artifact) | **1.58** |
+
+**Transport DOES beat linear once topic is removed** (following the curved ribbon is 18–58% more on-manifold than the straight chord); transport ≈ pwl-through-centroids, so the field faithfully learned the curve. **Corrected conclusion: praise is a strongly nonlinear social axis; the flat result was an artifact of measuring across topics at the read layer against a topic-dominated cloud.** Transport's on-manifold advantage is real here — reserved not for "geometric vs social" but for **curved** manifolds, of which praise is one.
 
 **Metric A (behavioral steerability): PASSES, but only at the right WRITE layer.** ActAdd at the read-layer (28) did nothing (win-rate ~0.5 flat over α=0–2; late layer, huge residual norms → negligible delta). A write-layer sweep found the true knob:
 
