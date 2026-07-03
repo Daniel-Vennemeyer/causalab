@@ -157,9 +157,22 @@ Prompted by the surprise that a social behavior would be flat, a **geometry prob
 | linear | 3.0 | **0.96** | **1.59** | 0.65 |
 | curved | 3.0 | 0.54 | 2.52 | 0.37 (degenerate) |
 
-`unit(c_mid−c_low)` = (praise-axis component cos59°≈0.51) + (large off-axis component): at matched norm it makes half the praise progress and spends the rest drifting off-manifold. At matched *praise* linear wins even harder (to hit curved's 0.50 it needs less push → closer to baseline on-manifold 1.089). **Robust verdict: praise's representational curvature does NOT translate into a behavioral steering advantage.** The control-relevant axis is the linear principal direction (PC1 corr 0.864 w/ level, Gate B); the curvature lives in secondary dims encoding **level-specific content**, not intensity — pushing into it wastes magnitude and breaks fluency.
+⚠️ **This first test was CONFOUNDED** (flagged on review): both directions were scaled to `α·‖c_hi−c_lo‖` (α=2–3), which overshoots `unit(c_mid−c_low)`'s natural magnitude (`‖c_mid−c_low‖≈0.5·‖c_hi−c_lo‖`) by 4–6× → forced off-manifold degeneration; and naturalness was judged by activation distance (circular). Redone below.
 
-**Unifying insight:** on-manifold *interpolation/reconstruction* (transport's strength, Metric B) and behavioral *control* (steering) are different objectives. Praise is curved → transport reconstructs intermediate states faithfully; but for *steering* the behavior, the linear diff-of-extremes is the right, sufficient tool. (Caveat: single-vector ActAdd can't realize a full curved *trajectory*; a sequence-of-deltas transport steer is untested — but the matched-praise argument makes a large behavioral win unlikely.)
+### Confound #4, FAIR TEST — praise-vs-naturalness frontier (conclusion SURVIVES)
+`praise_steer_frontier.py`: fine magnitude sweep (incl. small on-target α) for LINEAR `unit(c_hi−c_lo)`, MID `unit(c_mid−c_lo)` (59° off), TANGENT `unit(c_1−c_lo)` (**93° off**); naturalness = **response NLL under the unsteered model** (not activation geometry).
+
+| dir | reaches praise ≥0.75 at | naturalness cost (Δnll) |
+|---|---|---|
+| **linear** | α=1.5 | **+0.74** |
+| mid (59°) | α=4.0 | +2.21 (3×, distinct 0.50) |
+| tangent (93°) | never | — |
+
+**Decisive anti-overshoot evidence:** at small on-target α (0.5–1.0) where `mid` lands *on* c_mid, praise_wr = 0.44 = baseline chance → aiming at the intermediate state gives NO praise control; it's not a magnitude artifact. **Linear dominates the praise-vs-naturalness frontier at every praise level.**
+
+**Verdict (now rigorous): praise's representational curvature does NOT aid behavioral control.** The striking number: the ribbon's *local tangent* (c₁−c₀) is **93°** — nearly orthogonal to the effective control axis (c₅−c₀). The manifold curves through content/style space, but the praise *knob* is the global min→max contrast (linear) that cuts across that curve.
+
+**Unifying insight:** on-manifold *interpolation/reconstruction* (transport's strength, Metric B) and behavioral *control* (steering) are different objectives. Praise is curved → transport reconstructs intermediate states faithfully; but for *steering*, the linear diff-of-extremes is the right, sufficient tool. Remaining open door: single-vector ActAdd still can't realize a curved *trajectory* (sequence-of-deltas) — untested — but the frontier makes a large trajectory-transport win unlikely.
 
 **Metric A (behavioral steerability): PASSES, but only at the right WRITE layer.** ActAdd at the read-layer (28) did nothing (win-rate ~0.5 flat over α=0–2; late layer, huge residual norms → negligible delta). A write-layer sweep found the true knob:
 
