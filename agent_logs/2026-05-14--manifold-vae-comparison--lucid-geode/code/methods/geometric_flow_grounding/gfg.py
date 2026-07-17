@@ -71,13 +71,33 @@ def train_state_decoder(
     return model, {"recon": last, "latent_dim": int(latent_dim)}
 
 
-def _decoder_jvp_pullback(model: StateDecoder, u: torch.Tensor, v_amb: torch.Tensor) -> torch.Tensor:
+class VAEStateDecoder:
+    """Adapt a trained behavior-aligned ``VAEManifold`` to the ``.enc``/``.dec`` interface GFG
+    uses, so the higher-capacity VAE decoder can serve as the state manifold in place of the
+    plain AE. ``enc`` returns the intrinsic coordinate (posterior mean); ``dec`` decodes it to
+    unstandardized ambient space."""
+
+    def __init__(self, manifold):
+        self.manifold = manifold
+        self.latent_dim = int(manifold.intrinsic_dim)
+
+    def enc(self, x: torch.Tensor) -> torch.Tensor:
+        u, _ = self.manifold.encode(x)
+        return u
+
+    def dec(self, z: torch.Tensor) -> torch.Tensor:
+        return self.manifold.decode(z)
+
+
+def _decoder_jvp_pullback(model, u: torch.Tensor, v_amb: torch.Tensor) -> torch.Tensor:
     """Least-squares latent step whose decoder JVP best matches the ambient velocity v_amb:
     u_dot = argmin_w ||J_G(u) w - v_amb|| = J_G(u)^+ v_amb.  Returns (latent_dim,)."""
-    J = torch.autograd.functional.jacobian(
-        lambda z: model.dec(z.unsqueeze(0)).squeeze(0), u, vectorize=True
-    ).detach()                                    # (D, latent_dim)
-    sol = torch.linalg.lstsq(J, v_amb.unsqueeze(1)).solution
+    fn = lambda z: model.dec(z.unsqueeze(0)).squeeze(0)
+    try:
+        J = torch.autograd.functional.jacobian(fn, u, vectorize=True).detach()
+    except Exception:  # some decoders (topology adapters) don't support vectorized jacobian
+        J = torch.autograd.functional.jacobian(fn, u, vectorize=False).detach()
+    sol = torch.linalg.lstsq(J, v_amb.unsqueeze(1)).solution   # (latent_dim, 1)
     return sol.squeeze(1)
 
 

@@ -27,9 +27,12 @@ behavior_manifold_vae:
   transport_w_density: 0.0   # GFG grounds on-manifold WITHOUT a density penalty
   gfg_latent_dim: 2          # grid is intrinsically 2-D
   gfg_ae_epochs: 800
+  gfg_decoder: vae             # higher-capacity behavior-aligned VAE decoder (recon-only L_topo)
+  gfg_vae_topology: unstructured
+  gfg_vae_kl: 0.1
   patch_eval: true
   patch_num_steps: 20
   patch_n_prompts: 5
   patch_batch_size: 4
   device: cpu
-  arm_label: gfg
+  arm_label: gfg_vae

@@ -6,6 +6,6 @@ integrate in the latent space of a learned state decoder and decode each step, s
 lands on the decoder manifold by construction (GFG's tangent-bundle grounding).
 """
 
-from .gfg import StateDecoder, ntp_integrate_path, train_state_decoder
+from .gfg import StateDecoder, VAEStateDecoder, ntp_integrate_path, train_state_decoder
 
-__all__ = ["StateDecoder", "ntp_integrate_path", "train_state_decoder"]
+__all__ = ["StateDecoder", "VAEStateDecoder", "ntp_integrate_path", "train_state_decoder"]

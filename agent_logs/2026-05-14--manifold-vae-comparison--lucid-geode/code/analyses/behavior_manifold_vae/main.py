@@ -1026,14 +1026,42 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         # GFG state stream: train the decoder manifold now that ``field`` exists; the path
         # closures reference ``state_decoder`` at call time (below, in isometry / patch eval).
         if _is_gfg:
-            from methods.geometric_flow_grounding import train_state_decoder
             _ld = int(analysis.get("gfg_latent_dim", 0)) or (2 if behavior_geometry == "graph" else 1)
-            state_decoder, _dinfo = train_state_decoder(
-                features, _ld, epochs=int(analysis.get("gfg_ae_epochs", 800)),
-                lr=float(analysis.lr), seed=int(cfg.seed), device=device,
-            )
+            _gfg_decoder = str(analysis.get("gfg_decoder", "ae"))
+            if _gfg_decoder == "vae":
+                # Higher-capacity state manifold: the behavior-aligned VAE decoder trained
+                # reconstruction-only (GFG's L_topo). Fixes the plain AE's underfit (alphabet
+                # recon 193, grid 76) via standardized inputs + KL + the topology adapter.
+                from methods.geometric_flow_grounding import VAEStateDecoder
+                _lw = {"w_recon": 1.0, "w_kl": float(analysis.get("gfg_vae_kl", 0.1)),
+                       "w_behavior": 0.0, "w_isometry": 0.0, "w_geodesic": 0.0, "w_patch": 0.0,
+                       "w_contrastive": 0.0, "w_centroid_iso": 0.0, "w_compactness": 0.0,
+                       "w_manifold": float(analysis.get("gfg_vae_w_manifold", 0.0))}
+                _vres = train_behavior_aligned_vae(
+                    features=features, behavior_targets=None, method="flat_vae",
+                    latent_dim=_ld, hidden_dims=list(analysis.hidden_dims),
+                    topology=str(analysis.get("gfg_vae_topology", "unstructured")),
+                    n_charts=1, behavior_hidden_dims=list(analysis.behavior_hidden_dims),
+                    n_behavior=n_behavior, loss_weights=_lw,
+                    behavior_distance=analysis.behavior_distance, lr=float(analysis.lr),
+                    epochs=int(analysis.get("gfg_ae_epochs", 800)),
+                    batch_size=int(analysis.batch_size),
+                    kl_warmup_epochs=analysis.kl_warmup_epochs, device=device, seed=int(cfg.seed),
+                )
+                state_decoder = VAEStateDecoder(_vres["manifold"])
+                _fm = _vres["final_metrics"]
+                _dinfo = {"kind": "vae", "latent_dim": _ld,
+                          "topology": str(analysis.get("gfg_vae_topology", "unstructured")),
+                          "recon": _fm.get("val_recon", _fm.get("recon"))}
+            else:
+                from methods.geometric_flow_grounding import train_state_decoder
+                state_decoder, _dinfo = train_state_decoder(
+                    features, _ld, epochs=int(analysis.get("gfg_ae_epochs", 800)),
+                    lr=float(analysis.lr), seed=int(cfg.seed), device=device,
+                )
+                _dinfo["kind"] = "ae"
             tinfo["state_decoder"] = _dinfo
-            logger.info("GFG state decoder trained: %s", _dinfo)
+            logger.info("GFG state decoder (%s) trained: %s", _gfg_decoder, _dinfo)
 
         metrics_t: dict[str, Any] = {
             "reconstruction": None,
