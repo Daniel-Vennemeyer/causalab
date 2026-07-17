@@ -895,12 +895,26 @@ def main(cfg: DictConfig) -> dict[str, Any]:
     # Self-contained (early return); writes comparison_ready.json under the same
     # behavior_manifold_vae tree so compare_architectures aggregates it.
     # ======================================================================
-    if str(analysis.method) == "transport":
+    if str(analysis.method) in ("transport", "gfg"):
         from methods.behavioral_transport import (
             discovered_order,
             train_transport,
             integrate_path,
         )
+
+        # GFG (Geometric Flow Grounding): same transport dynamics field, but each step is
+        # integrated in a learned decoder's LATENT space and decoded (Neural Tangent
+        # Projection) so the path stays on-manifold by construction -- no w_density needed.
+        _is_gfg = str(analysis.method) == "gfg"
+        state_decoder = None  # trained after the field (below); closures resolve at call time
+
+        def _do_integrate(c_from, zf, zt, **kw):
+            if _is_gfg:
+                from methods.geometric_flow_grounding import ntp_integrate_path
+                return ntp_integrate_path(
+                    field, state_decoder, c_from, zf, zt, **kw
+                ).detach().cpu().float()
+            return integrate_path(field, c_from, zf, zt, **kw).detach().cpu().float()
 
         # Coordinate for transport: DISCOVERED (transition graph) by default, or the
         # task's GROUND-TRUTH ordinal (paper's coordinate) as an upper-bound that
@@ -942,10 +956,10 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             _cf = coords_full
 
             def _transport_path(i: int, j: int) -> torch.Tensor:
-                return integrate_path(
-                    field, U_amb[i].to(device), _cf[present_classes[i]], _cf[present_classes[j]],
+                return _do_integrate(
+                    U_amb[i].to(device), _cf[present_classes[i]], _cf[present_classes[j]],
                     n_steps=int(analysis.patch_num_steps), periods=periods,
-                ).detach().cpu().float()
+                )
         else:
             _use_gt = bool(analysis.get("transport_use_ground_truth_coord", False))
             _coord_source = "ground_truth" if _use_gt else "discovered"
@@ -1000,15 +1014,26 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             logger.info("transport trained: %s (periodic=%s, n_ranks=%d)", tinfo, periodic, n_ranks)
 
             def _transport_path(i: int, j: int) -> torch.Tensor:
-                return integrate_path(
-                    field,
+                return _do_integrate(
                     U_amb[i].to(device),
                     float(z_present[i]),
                     float(z_present[j]),
                     n_steps=int(analysis.patch_num_steps),
                     periodic=periodic,
                     period=float(n_ranks),
-                ).detach().cpu().float()
+                )
+
+        # GFG state stream: train the decoder manifold now that ``field`` exists; the path
+        # closures reference ``state_decoder`` at call time (below, in isometry / patch eval).
+        if _is_gfg:
+            from methods.geometric_flow_grounding import train_state_decoder
+            _ld = int(analysis.get("gfg_latent_dim", 0)) or (2 if behavior_geometry == "graph" else 1)
+            state_decoder, _dinfo = train_state_decoder(
+                features, _ld, epochs=int(analysis.get("gfg_ae_epochs", 800)),
+                lr=float(analysis.lr), seed=int(cfg.seed), device=device,
+            )
+            tinfo["state_decoder"] = _dinfo
+            logger.info("GFG state decoder trained: %s", _dinfo)
 
         metrics_t: dict[str, Any] = {
             "reconstruction": None,
@@ -1072,7 +1097,7 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             )
 
         # --- output dir + comparison_ready (same schema/tree as the VAE arms) ----
-        arm_label_t = analysis.get("arm_label", None) or "transport"
+        arm_label_t = analysis.get("arm_label", None) or ("gfg" if _is_gfg else "transport")
         arm_sub_t = (
             f"{analysis.method}_topo-{analysis.topology}"
             f"_metric-{analysis.metric}_charts{analysis.n_charts}"
@@ -1085,12 +1110,12 @@ def main(cfg: DictConfig) -> dict[str, Any]:
             out_dir_t = os.path.join(out_dir_t, tv)
         os.makedirs(out_dir_t, exist_ok=True)
         comparison_ready_t = {
-            "architecture": "transport",
+            "architecture": "gfg" if _is_gfg else "transport",
             "arm_label": arm_label_t,
             "task": cfg.task.name,
             "topology": analysis.topology,
             "n_charts": analysis.n_charts,
-            "metric": "transport",
+            "metric": "gfg" if _is_gfg else "transport",
             "loss_set": "behavior_aligned",
             "layer": layer,
             "token_position": token_position,
@@ -1110,11 +1135,11 @@ def main(cfg: DictConfig) -> dict[str, Any]:
         save_json_results(metrics_t, out_dir_t, "metrics.json")
         save_json_results(comparison_ready_t, out_dir_t, "comparison_ready.json")
         save_json_results(
-            {"analysis": ANALYSIS_NAME, "method": "transport", "transport": tinfo,
+            {"analysis": ANALYSIS_NAME, "method": str(analysis.method), "transport": tinfo,
              "periodic": bool(periodic), "n_ranks": n_ranks},
             out_dir_t, "metadata.json",
         )
-        logger.info("transport arm complete: %s", out_dir_t)
+        logger.info("%s arm complete: %s", analysis.method, out_dir_t)
         return {"out_dir": out_dir_t, "metrics": metrics_t, "comparison_ready": comparison_ready_t}
 
     baseline_dir = os.path.join(root, "baseline")
