@@ -174,6 +174,20 @@ Prompted by the surprise that a social behavior would be flat, a **geometry prob
 
 **Unifying insight:** on-manifold *interpolation/reconstruction* (transport's strength, Metric B) and behavioral *control* (steering) are different objectives. Praise is curved → transport reconstructs intermediate states faithfully; but for *steering*, the linear diff-of-extremes is the right, sufficient tool. Remaining open door: single-vector ActAdd still can't realize a curved *trajectory* (sequence-of-deltas) — untested — but the frontier makes a large trajectory-transport win unlikely.
 
+### GFG (Geometric Flow Grounding, Yu et al. 2026) applied — PARTIALLY REVERSES confound #4
+`gfg_praise.py`: GFG state decoder G:Z→X (autoencoder) on the topic-controlled ribbon; Neural Tangent Projection via autograd Jacobian J_G(z₀); NTP steer = JVP(G,z₀,dz_praise); projection residual = 1−tangent_frac.
+
+| direction | angle vs linear | tangent_frac (d_z=1) | steers (praise_wr) |
+|---|---|---|---|
+| linear (c₅−c₀) | 0° | **0.87** | 0.92 |
+| **ntp** (JVP thru G) | 21° | 1.00 | **0.75** |
+| mid (c₃−c₀) | 59° | 0.21 | 0.50 |
+| tangent (c₁−c₀, local) | 93° | 0.13 | 0.17 |
+
+**Two different "tangents" — I'd been using the wrong one.** The *local instantaneous* tangent (c₁−c₀, the ribbon's wiggle) is 93° from control and inert. But GFG's decoder (low latent dim) learns the **principal/global** tangent = the ribbon's dominant axis ≈ the linear control axis (21°, frac 0.87). **NTP uses the principal tangent and STEERS (0.75).** So confound-#4's "control is transverse (93°)" was an artifact of equating "on-manifold" with the *local* tangent. **GFG's assumption HOLDS: the effective control axis IS the manifold's principal tangent** (frac 0.87), when modeled at praise's true ~1-D intrinsic dim (clean at d_z=1–2; d_z=3 over-fits the tangent space and blurs the metric).
+
+**Net:** GFG's tangency claim transfers to praise control (control ≈ principal tangent, NTP recovers a working steer), but GFG does NOT beat plain linear for steering strength (0.75 < 0.92). GFG's value here is (a) it correctly *identifies* the control axis via a principled operator, and (b) its discovery-side machinery — dual-stream topic/praise disentanglement (we did this by hand), the residual as a naturalness critic, and the velocity-primitive codebook as a *learned* sycophancy atlas (the natural next build: run it on general sycophancy, which failed Gate A as 1-D, and see if praise/agreement/deference fall out as separate atoms).
+
 **Metric A (behavioral steerability): PASSES, but only at the right WRITE layer.** ActAdd at the read-layer (28) did nothing (win-rate ~0.5 flat over α=0–2; late layer, huge residual norms → negligible delta). A write-layer sweep found the true knob:
 
 | write-layer | α | praise win-rate | distinct-tok |
