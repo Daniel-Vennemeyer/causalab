@@ -37,3 +37,33 @@ into "spend the effort on a good decoder"; the on-manifold guarantee is then aut
 or reuse the trained behavior-aligned VAE decoder instead of a fresh plain AE; and GFG's velocity
 primitive codebook (VQ) which we have not added (dynamics stream is currently the plain transport
 field). The alphabet/grid losses are decoder-capacity problems, not method-thesis problems.
+
+## UPDATE — VAE decoder (`gfg_decoder: vae`) REFUTES the decoder-capacity hypothesis
+Wired the reconstruction-only behavior-aligned VAE (`flat_vae`, `w_recon=1`/`w_kl=0.1`, all else 0)
+as the state manifold (`VAEStateDecoder`, `arm_label=gfg_vae`). Reconstruction improved 4–7× on
+every task — yet on-manifold steering got WORSE on every task:
+
+| task | recon AE→VAE | **dist AE-GFG → VAE-GFG** | coherence VAE | transport | spline |
+|---|---|---|---|---|---|
+| weekdays (ring) | 112 → 25 | 0.169 → **1.41** ❌ | 0.697 | 0.700 | ~0.33 |
+| alphabet (line) | 193 → 41 | 4.30 → **4.38** ❌ | 0.899 | 0.527 | 0.219 |
+| grid (2-D) | 76 → 17 | 1.14 → **1.68** ❌ | 0.968 | 0.600 | — |
+
+**Conclusion: GFG steering quality is NOT bottlenecked by reconstruction fidelity.** Cleanest
+evidence = alphabet (a line, no topology confound): recon 193→41 but distance unchanged (4.30→4.38).
+GFG needs a decoder whose LATENT AXIS is aligned with the behavioral steering direction; recon-only
+training aligns the latent with variance, not behavior, and the KL/standardization that buy better
+recon scramble the behavioral ordering → pulling the transport velocity back through that latent
+traverses the manifold poorly. The plain AE's WORSE recon came with a latent that traced the
+behavioral coordinate more faithfully (hence its weekdays win 0.169). **Two confounds/levers
+identified:** (1) topology — weekdays is a ring but I used a 1-D UNSTRUCTURED latent, which must fold
+(likely the weekdays blow-up); a `topology=s1` latent is the correct test. (2) behavioral alignment
+— the state decoder must be trained so its latent parametrizes the behavioral axis (e.g. with the
+isometry/behavior loss), departing from GFG's pure recon-only `L_topo`.
+
+**Net finding across both GFG runs:** GFG's on-manifold grounding *works* (weekdays AE 0.169 beats
+everything) but is **fragile** — it depends on the decoder's latent being behaviorally aligned AND
+topology-correct, neither of which reconstruction quality ensures. Where those align (weekdays AE),
+GFG dominates; otherwise the density-regularized free transport field (or the spline) is more robust.
+The transport field's `w_density` is a blunt but reliable on-manifold force; GFG trades it for a
+decoder-alignment requirement that is easy to get wrong.
