@@ -1033,10 +1033,19 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                 # reconstruction-only (GFG's L_topo). Fixes the plain AE's underfit (alphabet
                 # recon 193, grid 76) via standardized inputs + KL + the topology adapter.
                 from methods.geometric_flow_grounding import VAEStateDecoder
+                # Optional BEHAVIORAL ALIGNMENT of the state latent: recon-only aligns the latent
+                # with variance, not behavior (VAE decoder reconstructed 4-7x better yet steered
+                # worse). Turning on centroid-isometry / isometry makes the latent parametrize the
+                # behavioral axis (d_y), so pulling the transport velocity back traverses along it.
+                _w_ciso = float(analysis.get("gfg_vae_w_centroid_iso", 0.0))
+                _w_iso = float(analysis.get("gfg_vae_w_isometry", 0.0))
+                _align = (_w_ciso > 0.0) or (_w_iso > 0.0)
                 _lw = {"w_recon": 1.0, "w_kl": float(analysis.get("gfg_vae_kl", 0.1)),
-                       "w_behavior": 0.0, "w_isometry": 0.0, "w_geodesic": 0.0, "w_patch": 0.0,
-                       "w_contrastive": 0.0, "w_centroid_iso": 0.0, "w_compactness": 0.0,
+                       "w_behavior": 0.0, "w_isometry": _w_iso, "w_geodesic": 0.0, "w_patch": 0.0,
+                       "w_contrastive": 0.0, "w_centroid_iso": _w_ciso, "w_compactness": 0.0,
                        "w_manifold": float(analysis.get("gfg_vae_w_manifold", 0.0))}
+                _geo_dist = ("precomputed" if behavior_geometry in ("precomputed", "graph")
+                             else behavior_geometry)
                 _vres = train_behavior_aligned_vae(
                     features=features, behavior_targets=None, method="flat_vae",
                     latent_dim=_ld, hidden_dims=list(analysis.hidden_dims),
@@ -1047,11 +1056,15 @@ def main(cfg: DictConfig) -> dict[str, Any]:
                     epochs=int(analysis.get("gfg_ae_epochs", 800)),
                     batch_size=int(analysis.batch_size),
                     kl_warmup_epochs=analysis.kl_warmup_epochs, device=device, seed=int(cfg.seed),
+                    geometry_coords=(cls_idx.float() if _align else None),
+                    geometry_distance=_geo_dist, geometry_period=geometry_period,
+                    geometry_matrix=(geometry_matrix if _align else None),
                 )
                 state_decoder = VAEStateDecoder(_vres["manifold"])
                 _fm = _vres["final_metrics"]
                 _dinfo = {"kind": "vae", "latent_dim": _ld,
                           "topology": str(analysis.get("gfg_vae_topology", "unstructured")),
+                          "aligned": _align, "w_centroid_iso": _w_ciso, "w_isometry": _w_iso,
                           "recon": _fm.get("val_recon", _fm.get("recon"))}
             else:
                 from methods.geometric_flow_grounding import train_state_decoder

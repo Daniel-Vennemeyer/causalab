@@ -1,0 +1,38 @@
+# @package _global_
+# GFG + BEHAVIORAL-ALIGNED state decoder. Geometric Flow Grounding on weekdays (ring). Same transport tangent field as
+# weekdays_vae_transport, but steering integrates in a learned decoder's LATENT space
+# and decodes each step (Neural Tangent Projection) so the path stays on-manifold by
+# construction. Clean ablation: identical coordinate/field, but w_density=0.0 -- the
+# decisive test is whether NTP grounding replaces the density crutch transport needed.
+defaults:
+  - /base
+  - /task: natural_domains_arithmetic_weekdays
+  - /model: llama31_8b
+  - /analysis/behavior_manifold_vae
+  - _self_
+
+task:
+  target_variable: result
+
+behavior_manifold_vae:
+  method: gfg
+  topology: unstructured
+  metric: latent_linear
+  latent_dim: 1
+  n_charts: 1
+  layers: [28]
+  token_positions: [last_token]
+  behavior_geometry: precomputed
+  transition_variable: number
+  transition_edge_min_frac: 0.34
+  transport_neighbor_radius: 1
+  transport_w_density: 0.0     # GFG grounds on-manifold WITHOUT a density penalty
+  gfg_latent_dim: 1            # ring is intrinsically 1-D
+  gfg_ae_epochs: 800
+  gfg_decoder: vae             # higher-capacity behavior-aligned VAE decoder (recon-only L_topo)
+  gfg_vae_topology: unstructured
+  gfg_vae_kl: 0.1
+  gfg_vae_w_centroid_iso: 1.0  # ALIGN latent to behavioral axis (match latent centroid dists to d_y)
+  patch_eval: true
+  device: cpu
+  arm_label: gfg_align

@@ -1,0 +1,39 @@
+# @package _global_
+# GFG + BEHAVIORAL-ALIGNED state decoder. Geometric Flow Grounding on grid_5x5 (2-D lattice). Same 2-D transport field as
+# grid_5x5_vae_transport (D x 2 Jacobian, graph-edge neighbors), but steering integrates in
+# a learned 2-D decoder's LATENT space and decodes each step (Neural Tangent Projection).
+# Clean ablation: w_density=0.0 -- does NTP grounding hold a 2-D manifold on-distribution
+# without the density force? Completes the 2-D comparison: spline vs VAE vs transport vs GFG.
+defaults:
+  - /base
+  - /task: graph_walk_grid_5x5
+  - /model: llama31_8b
+  - /analysis/behavior_manifold_vae
+  - _self_
+
+task:
+  target_variable: node_coordinates
+  n_train: 500   # must match grid_5x5_current_spline (loads its cached dataset/features)
+
+behavior_manifold_vae:
+  method: gfg
+  topology: unstructured
+  metric: latent_linear
+  latent_dim: 2
+  n_charts: 1
+  layers: [28]
+  token_positions: [last]
+  behavior_geometry: graph   # 2-D known-graph coordinate + adjacency
+  transport_w_density: 0.0   # GFG grounds on-manifold WITHOUT a density penalty
+  gfg_latent_dim: 2          # grid is intrinsically 2-D
+  gfg_ae_epochs: 800
+  gfg_decoder: vae             # higher-capacity behavior-aligned VAE decoder (recon-only L_topo)
+  gfg_vae_topology: unstructured
+  gfg_vae_kl: 0.1
+  gfg_vae_w_centroid_iso: 1.0  # ALIGN latent to behavioral axis (match latent centroid dists to d_y)
+  patch_eval: true
+  patch_num_steps: 20
+  patch_n_prompts: 5
+  patch_batch_size: 4
+  device: cpu
+  arm_label: gfg_align
